@@ -1,0 +1,837 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Olympus Studio - Document Editor</title>
+    <!-- 引入 Inter 字体 -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <!-- 引入 Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        /* === CSS Variables (Shadcn Style) === */
+        :root {
+            --background: #ffffff;
+            --foreground: #09090b;
+            --muted: #f4f4f5;
+            --muted-foreground: #71717a;
+            --border: #e4e4e7;
+            --primary: #18181b;
+            --primary-foreground: #fafafa;
+            --radius-sm: 0.25rem;
+            --radius-md: 0.5rem;
+            --radius-lg: 0.75rem;
+            --radius-xl: 1rem;
+            --radius-full: 9999px;
+            --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+            --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.05), 0 2px 4px -2px rgb(0 0 0 / 0.05);
+            --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.05);
+            --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+
+            --editor-bg: #fafafa;
+            /* 编辑器外围背景色，比白纸稍暗 */
+        }
+
+        /* === Reset & Base === */
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: var(--font-sans);
+            background-color: var(--background);
+            color: var(--foreground);
+            height: 100vh;
+            display: flex;
+            overflow: hidden;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        button {
+            border: none;
+            background: none;
+            cursor: pointer;
+            font-family: inherit;
+        }
+
+        input,
+        textarea {
+            font-family: inherit;
+        }
+
+        /* === Common Utilities === */
+        .flex-center {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .icon-btn {
+            color: var(--muted-foreground);
+            padding: 0.35rem;
+            border-radius: var(--radius-md);
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+        }
+
+        .icon-btn:hover {
+            background-color: var(--muted);
+            color: var(--foreground);
+        }
+
+        .divider-v {
+            width: 1px;
+            height: 16px;
+            background-color: var(--border);
+            margin: 0 0.5rem;
+        }
+
+        /* === Layout === */
+        .app-container {
+            display: flex;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        /* === Primary Sidebar (Reused from Index) === */
+        .sidebar-primary {
+            width: 68px;
+            min-width: 68px;
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 1rem 0;
+            background: var(--background);
+            z-index: 20;
+        }
+
+        .logo-box {
+            width: 36px;
+            height: 36px;
+            background: var(--primary);
+            color: var(--primary-foreground);
+            border-radius: var(--radius-md);
+            font-weight: 700;
+            font-size: 1.2rem;
+            margin-bottom: 2rem;
+        }
+
+        .nav-item {
+            width: 48px;
+            height: 48px;
+            border-radius: var(--radius-md);
+            color: var(--muted-foreground);
+            margin-bottom: 0.5rem;
+            transition: all 0.2s ease;
+            gap: 4px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .nav-item:hover {
+            background-color: var(--muted);
+            color: var(--foreground);
+        }
+
+        .nav-item.active {
+            background-color: var(--muted);
+            color: var(--foreground);
+            font-weight: 500;
+        }
+
+        .nav-item span {
+            font-size: 0.6rem;
+        }
+
+        .sidebar-bottom {
+            margin-top: auto;
+        }
+
+        /* === Studio Main Area === */
+        .studio-main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* --- Top Header --- */
+        .studio-header {
+            height: 56px;
+            min-height: 56px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 1rem;
+            background: var(--background);
+            z-index: 10;
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            width: 300px;
+        }
+
+        .header-center {
+            flex: 1;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .doc-title {
+            font-size: 0.9rem;
+            font-weight: 500;
+            color: var(--foreground);
+        }
+
+        .doc-title-edit {
+            color: var(--muted-foreground);
+            cursor: pointer;
+        }
+
+        .doc-title-edit:hover {
+            color: var(--foreground);
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            width: 300px;
+            justify-content: flex-end;
+        }
+
+        .btn-share {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            font-size: 0.8rem;
+            font-weight: 500;
+            border: 1px solid var(--border);
+            padding: 0.35rem 0.75rem;
+            border-radius: var(--radius-md);
+            color: var(--foreground);
+            transition: background 0.2s;
+        }
+
+        .btn-share:hover {
+            background: var(--muted);
+        }
+
+        /* --- Workspace Split Container --- */
+        .studio-workspace {
+            flex: 1;
+            display: flex;
+            overflow: hidden;
+        }
+
+        /* === Left Chat Panel === */
+        .chat-panel {
+            width: 420px;
+            min-width: 300px;
+            max-width: 600px;
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            background: var(--background);
+            position: relative;
+        }
+
+        /* Chat History Area */
+        .chat-history {
+            flex: 1;
+            overflow-y: auto;
+            padding: 1.5rem;
+            padding-bottom: 120px;
+            /* Leave space for input */
+        }
+
+        /* Custom Scrollbar for sleekness */
+        .chat-history::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .chat-history::-webkit-scrollbar-thumb {
+            background-color: #e4e4e7;
+            border-radius: 10px;
+        }
+
+        /* Chat AI Message Style (Mimicking the screenshot table) */
+        .ai-message {
+            font-size: 0.875rem;
+            color: var(--foreground);
+            line-height: 1.6;
+        }
+
+        .ai-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 1rem;
+            margin-bottom: 1rem;
+            border-radius: var(--radius-md);
+            overflow: hidden;
+            border: 1px solid var(--border);
+        }
+
+        .ai-table th,
+        .ai-table td {
+            border: 1px solid var(--border);
+            padding: 0.75rem 1rem;
+            text-align: left;
+        }
+
+        .ai-table th {
+            background-color: var(--muted);
+            font-weight: 600;
+            font-size: 0.8rem;
+        }
+
+        .ai-table td {
+            font-size: 0.8rem;
+        }
+
+        .ai-table tr:first-child td {
+            font-weight: 500;
+        }
+
+        .chat-text {
+            margin-top: 1rem;
+            color: var(--muted-foreground);
+            font-size: 0.85rem;
+        }
+
+        /* Chat Input Area (Floating Card Style) */
+        .chat-input-wrapper {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            padding: 1rem;
+            background: linear-gradient(to top, rgba(255, 255, 255, 1) 70%, rgba(255, 255, 255, 0));
+            z-index: 10;
+        }
+
+        /* Input Tabs */
+        .input-tabs {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 0.5rem;
+            margin-left: 0.5rem;
+        }
+
+        .input-tab {
+            font-size: 0.75rem;
+            font-weight: 600;
+            padding: 0.35rem 0.75rem;
+            border-radius: var(--radius-full);
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            cursor: pointer;
+            border: 1px solid transparent;
+        }
+
+        .input-tab.active {
+            background-color: var(--primary);
+            color: var(--primary-foreground);
+        }
+
+        .input-tab.inactive {
+            color: var(--muted-foreground);
+        }
+
+        .input-tab.inactive:hover {
+            background-color: var(--muted);
+        }
+
+        .tag-discount {
+            color: #ef4444;
+            font-size: 0.65rem;
+            margin-left: 2px;
+        }
+
+        /* The Box */
+        .chat-input-box {
+            background: var(--background);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-xl);
+            box-shadow: var(--shadow-lg);
+            padding: 0.75rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .chat-input-box textarea {
+            border: none;
+            outline: none;
+            resize: none;
+            background: transparent;
+            width: 100%;
+            min-height: 44px;
+            max-height: 150px;
+            font-size: 0.9rem;
+            color: var(--foreground);
+            padding: 0.25rem;
+        }
+
+        .chat-input-box textarea::placeholder {
+            color: #a1a1aa;
+        }
+
+        /* Input Bottom Toolbar */
+        .input-toolbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 0.25rem;
+        }
+
+        .toolbar-group {
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
+        }
+
+        .btn-dropdown-small {
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
+            font-size: 0.75rem;
+            color: var(--muted-foreground);
+            padding: 0.3rem 0.6rem;
+            border-radius: var(--radius-full);
+            transition: background 0.2s;
+        }
+
+        .btn-dropdown-small:hover {
+            background: var(--muted);
+            color: var(--foreground);
+        }
+
+        .btn-speak-small {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            background: var(--primary);
+            color: var(--primary-foreground);
+            font-size: 0.8rem;
+            font-weight: 500;
+            padding: 0.4rem 0.8rem;
+            border-radius: var(--radius-full);
+        }
+
+        /* === Right Preview/Editor Panel === */
+        .preview-panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background-color: var(--editor-bg);
+        }
+
+        /* Editor Top Action Bar */
+        .editor-top-bar {
+            height: 48px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 1rem;
+        }
+
+        .editor-icon {
+            color: var(--muted-foreground);
+        }
+
+        .btn-view-export {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            font-size: 0.8rem;
+            color: var(--muted-foreground);
+            border: 1px solid var(--border);
+            padding: 0.3rem 0.75rem;
+            border-radius: var(--radius-md);
+            background: var(--background);
+        }
+
+        .btn-view-export:hover {
+            background: var(--muted);
+            color: var(--foreground);
+        }
+
+        /* Editor Formatting Toolbar */
+        .editor-formatting-bar {
+            background: var(--background);
+            border-bottom: 1px solid var(--border);
+            padding: 0.5rem 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
+            flex-wrap: wrap;
+            border-radius: var(--radius-lg);
+            margin: 0 1.5rem;
+            box-shadow: var(--shadow-sm);
+        }
+
+        /* Select Selectors in Toolbar */
+        .format-select {
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
+            border: 1px solid var(--border);
+            padding: 0.3rem 0.5rem;
+            border-radius: var(--radius-sm);
+            font-size: 0.8rem;
+            color: var(--foreground);
+            cursor: pointer;
+        }
+
+        .format-select:hover {
+            background: var(--muted);
+        }
+
+        .format-select-text {
+            min-width: 60px;
+        }
+
+        /* Canvas Area (The A4 Paper) */
+        .editor-canvas-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 2rem;
+            display: flex;
+            justify-content: center;
+        }
+
+        .editor-canvas-container::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .editor-canvas-container::-webkit-scrollbar-thumb {
+            background-color: #d4d4d8;
+            border-radius: 10px;
+            border: 2px solid var(--editor-bg);
+        }
+
+        .document-paper {
+            background: var(--background);
+            width: 100%;
+            max-width: 800px;
+            min-height: 1056px;
+            /* Approx US Letter/A4 */
+            padding: 4rem 5rem;
+            box-shadow: var(--shadow-md);
+            border-radius: 2px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Mock Document Content Styling */
+        .doc-watermark {
+            font-size: 0.6rem;
+            color: #d4d4d8;
+            text-align: right;
+            margin-bottom: 2rem;
+        }
+
+        .doc-h1 {
+            font-size: 1.8rem;
+            font-weight: 700;
+            text-align: center;
+            margin-bottom: 3rem;
+            letter-spacing: 0.05em;
+        }
+
+        .doc-party-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 3rem;
+        }
+
+        .doc-party-col {
+            flex: 1;
+            font-size: 0.85rem;
+            line-height: 2;
+        }
+
+        .doc-party-col strong {
+            font-weight: 600;
+            font-size: 0.95rem;
+        }
+
+        .highlight-gray {
+            background-color: var(--muted);
+            padding: 0 4px;
+            border-radius: 2px;
+            color: var(--muted-foreground);
+        }
+
+        .doc-paragraph {
+            font-size: 0.9rem;
+            line-height: 1.8;
+            text-indent: 2em;
+            margin-bottom: 2rem;
+        }
+
+        .doc-h2 {
+            font-size: 1.1rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            margin-top: 2rem;
+        }
+
+        .doc-list-item {
+            font-size: 0.9rem;
+            line-height: 1.8;
+            margin-bottom: 0.5rem;
+            padding-left: 1rem;
+            text-indent: -1rem;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="app-container">
+        <!-- 左侧主导航 (与主页保持一致) -->
+        <nav class="sidebar-primary">
+            <div class="logo-box flex-center">O</div>
+            <button class="nav-item"><i data-lucide="plus" stroke-width="2.5" size="20"></i><span>New</span></button>
+            <button class="nav-item"><i data-lucide="home" stroke-width="2" size="20"></i><span>Home</span></button>
+            <button class="nav-item active"><i data-lucide="file-text" stroke-width="2" size="20"></i><span>AI
+                    Docs</span></button>
+            <button class="nav-item"><i data-lucide="workflow" stroke-width="2"
+                    size="20"></i><span>Flows</span></button>
+
+            <div class="sidebar-bottom">
+                <button class="nav-item"><i data-lucide="circle-user-round" stroke-width="2" size="24"></i></button>
+            </div>
+        </nav>
+
+        <!-- 右侧主体工作区 -->
+        <div class="studio-main">
+
+            <!-- 顶部全局控制栏 -->
+            <header class="studio-header">
+                <div class="header-left">
+                    <button class="icon-btn"><i data-lucide="chevron-left" size="20"></i></button>
+                    <button class="icon-btn"><i data-lucide="panel-left-close" size="20"></i></button>
+                </div>
+
+                <div class="header-center">
+                    <span class="doc-title">博主推广合作协议专业排版与合同规范化</span>
+                    <i data-lucide="pen-line" size="14" class="doc-title-edit"></i>
+                </div>
+
+                <div class="header-right">
+                    <button class="btn-share"><i data-lucide="link" size="14"></i> Share</button>
+                    <button class="icon-btn"><i data-lucide="history" size="18"></i></button>
+                    <button class="icon-btn"><i data-lucide="more-horizontal" size="18"></i></button>
+                </div>
+            </header>
+
+            <!-- 工作区分屏 (Chat + Preview) -->
+            <div class="studio-workspace">
+
+                <!-- 左侧 AI 对话面板 -->
+                <aside class="chat-panel">
+
+                    <!-- 聊天记录区域 -->
+                    <div class="chat-history">
+                        <div class="ai-message">
+                            <!-- 模拟图片中 AI 生成的表格 -->
+                            <table class="ai-table">
+                                <tbody>
+                                    <tr>
+                                        <td>标题层级</td>
+                                        <td>合同各标题应加粗，条款标题使用黑体加粗</td>
+                                    </tr>
+                                    <tr>
+                                        <td>当事人信息区</td>
+                                        <td>甲乙双方分两栏展示，信息清晰对齐</td>
+                                    </tr>
+                                    <tr>
+                                        <td>子条款编号</td>
+                                        <td>统一改为（一）（二）中文括号编号，二级用1. 2. 3.</td>
+                                    </tr>
+                                    <tr>
+                                        <td>第三条档位</td>
+                                        <td>三个档位各用独立浅灰色卡片框展示，类似合同附表</td>
+                                    </tr>
+                                    <tr>
+                                        <td>关键数字</td>
+                                        <td>金额、比例（30%、99元、199元、299元）均加粗强调</td>
+                                    </tr>
+                                    <tr>
+                                        <td>签署区</td>
+                                        <td>甲乙双方分左右两栏，含盖章/签字行、日期行，专业规范</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                            <p class="chat-text">如需调整字体大小、颜色、档位样式或任何细节，随时告诉我！</p>
+
+                            <!-- 消息底部的操作按钮 -->
+                            <div style="margin-top: 1rem; display: flex; gap: 0.25rem;">
+                                <button class="icon-btn"><i data-lucide="copy" size="14"></i></button>
+                                <button class="icon-btn"><i data-lucide="thumbs-up" size="14"></i></button>
+                                <button class="icon-btn"><i data-lucide="thumbs-down" size="14"></i></button>
+                                <button class="icon-btn"><i data-lucide="more-horizontal" size="14"></i></button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 底部输入框悬浮区 -->
+                    <div class="chat-input-wrapper">
+                        <!-- 输入模式 Tab -->
+                        <div class="input-tabs">
+                            <div class="input-tab active"><i data-lucide="file-text" size="14"></i> AI Docs</div>
+                            <div class="input-tab inactive">
+                                <i data-lucide="bot" size="14"></i> Let Claw handle it <span class="tag-discount">75%
+                                    off</span>
+                            </div>
+                        </div>
+
+                        <!-- 实际输入框卡片 -->
+                        <div class="chat-input-box">
+                            <textarea placeholder="Enter your doc request here..." rows="2"></textarea>
+
+                            <div class="input-toolbar">
+                                <div class="toolbar-group">
+                                    <button class="icon-btn"
+                                        style="background: var(--muted); border-radius: var(--radius-full);"><i
+                                            data-lucide="plus" size="16"></i></button>
+
+                                    <button class="btn-dropdown-small">
+                                        Rich Text <i data-lucide="chevron-down" size="12"></i>
+                                    </button>
+
+                                    <button class="btn-dropdown-small" style="background: var(--muted);">
+                                        <i data-lucide="sparkles" size="12"></i> Standard <i data-lucide="chevron-down"
+                                            size="12"></i>
+                                    </button>
+                                </div>
+                                <div class="toolbar-group">
+                                    <button class="icon-btn" style="border-radius: var(--radius-full);"><i
+                                            data-lucide="mic" size="16"></i></button>
+                                    <button class="btn-speak-small"><i data-lucide="audio-lines" size="14"></i>
+                                        Speak</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </aside>
+
+                <!-- 右侧 文档预览/编辑 面板 -->
+                <main class="preview-panel">
+
+                    <!-- 编辑器顶部操作条 -->
+                    <div class="editor-top-bar">
+                        <i data-lucide="file-edit" size="18" class="editor-icon"></i>
+                        <button class="btn-view-export">View & Export <i data-lucide="chevron-down"
+                                size="14"></i></button>
+                    </div>
+
+                    <!-- 富文本格式化工具栏 -->
+                    <div class="editor-formatting-bar">
+                        <button class="icon-btn"><i data-lucide="undo-2" size="16"></i></button>
+                        <button class="icon-btn"><i data-lucide="redo-2" size="16"></i></button>
+                        <div class="divider-v"></div>
+
+                        <div class="format-select">
+                            <span class="format-select-text">Normal Text</span> <i data-lucide="chevron-down"
+                                size="14"></i>
+                        </div>
+                        <div class="format-select">
+                            <span class="format-select-text">SimHei</span> <i data-lucide="chevron-down" size="14"></i>
+                        </div>
+                        <div class="format-select" style="width: 40px; justify-content: center;">14</div>
+
+                        <div class="divider-v"></div>
+
+                        <button class="icon-btn"><i data-lucide="bold" size="16"></i></button>
+                        <button class="icon-btn"><i data-lucide="italic" size="16"></i></button>
+                        <button class="icon-btn"><i data-lucide="underline" size="16"></i></button>
+                        <button class="icon-btn"><i data-lucide="strikethrough" size="16"></i></button>
+
+                        <div class="divider-v"></div>
+
+                        <button class="icon-btn"><i data-lucide="align-left" size="16"></i></button>
+                        <button class="icon-btn"><i data-lucide="align-center" size="16"></i></button>
+                        <button class="icon-btn"><i data-lucide="align-right" size="16"></i></button>
+
+                        <div class="divider-v"></div>
+
+                        <button class="icon-btn"><i data-lucide="list" size="16"></i></button>
+                        <button class="icon-btn"><i data-lucide="list-ordered" size="16"></i></button>
+                        <button class="icon-btn"><i data-lucide="outdent" size="16"></i></button>
+                        <button class="icon-btn"><i data-lucide="indent" size="16"></i></button>
+
+                        <div class="divider-v"></div>
+                        <button class="icon-btn"><i data-lucide="baseline" size="16"></i></button>
+                    </div>
+
+                    <!-- 白纸画布区域 -->
+                    <div class="editor-canvas-container">
+                        <div class="document-paper">
+
+                            <div class="doc-watermark">博主推广合作协议</div>
+
+                            <h1 class="doc-h1">博主推广合作协议</h1>
+
+                            <!-- 甲方乙方信息区 -->
+                            <div class="doc-party-row">
+                                <div class="doc-party-col">
+                                    <strong>甲方（合作方）：</strong><br>
+                                    名称：[你的公司名称/主体名称]<br>
+                                    统一社会信用代码：<span class="highlight-gray">[填写]</span><br>
+                                    联系人：<span class="highlight-gray">[填写]</span><br>
+                                    联系方式：<span class="highlight-gray">[填写]</span>
+                                </div>
+                                <div class="doc-party-col">
+                                    <strong>乙方（博主）：</strong><br>
+                                    姓名/昵称：<span class="highlight-gray">[博主姓名/昵称]</span><br>
+                                    身份证/统一社会信用代码：<span class="highlight-gray">[填写]</span><br>
+                                    小红书账号：<span class="highlight-gray">[填写]</span><br>
+                                    联系方式：<span class="highlight-gray">[填写]</span>
+                                </div>
+                            </div>
+
+                            <p class="doc-paragraph">
+                                鉴于甲方为 [产品名称] 的运营方，乙方为具有内容创作及传播能力的自媒体/内容创作者，双方本着平等、自愿、诚实信用原则，就乙方参与甲方推广合作事宜达成如下协议，以兹共同遵守。
+                            </p>
+
+                            <h2 class="doc-h2">第一条 定义</h2>
+                            <div class="doc-list-item">（一）<strong>产品：</strong>指甲方运营的 [产品名称] 及其相关服务。</div>
+                            <div class="doc-list-item">
+                                （二）<strong>推广链接/邀请码：</strong>指甲方分配给乙方、用于识别推广归因关系的专属链接、邀请码、二维码或其他追踪方式。</div>
+                            <div class="doc-list-item">
+                                （三）<strong>有效付费用户：</strong>指通过乙方推广链接/邀请码进入产品并完成真实付款，经甲方风控审核后认定为真实、有效...</div>
+
+                        </div>
+                    </div>
+                </main>
+            </div>
+        </div>
+    </div>
+
+    <!-- 初始化 Icons -->
+    <script>
+        lucide.createIcons();
+    </script>
+</body>
+
+</html>

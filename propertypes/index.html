@@ -1,0 +1,692 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Olympus AI Workspace</title>
+    <!-- 引入 Inter 字体以获得高级排版感 -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <!-- 引入 Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        /* === CSS Variables (Shadcn Style) === */
+        :root {
+            --background: #ffffff;
+            --foreground: #09090b;
+            --muted: #f4f4f5;
+            --muted-foreground: #71717a;
+            --border: #e4e4e7;
+            --input: #e4e4e7;
+            --primary: #18181b;
+            --primary-foreground: #fafafa;
+            --radius-md: 0.5rem;
+            --radius-lg: 0.75rem;
+            --radius-full: 9999px;
+            --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+            --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.05), 0 2px 4px -2px rgb(0 0 0 / 0.05);
+            --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.05), 0 4px 6px -4px rgb(0 0 0 / 0.05);
+            --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }
+
+        /* === Reset & Base === */
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: var(--font-sans);
+            background-color: var(--background);
+            color: var(--foreground);
+            height: 100vh;
+            display: flex;
+            overflow: hidden;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        button {
+            border: none;
+            background: none;
+            cursor: pointer;
+            font-family: inherit;
+        }
+
+        ul {
+            list-style: none;
+        }
+
+        /* === Layout === */
+        .app-container {
+            display: flex;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        /* === Primary Sidebar (Thin) === */
+        .sidebar-primary {
+            width: 68px;
+            min-width: 68px;
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 1rem 0;
+            background: var(--background);
+            z-index: 20;
+        }
+
+        .logo-box {
+            width: 36px;
+            height: 36px;
+            background: var(--primary);
+            color: var(--primary-foreground);
+            border-radius: var(--radius-md);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 1.2rem;
+            margin-bottom: 2rem;
+        }
+
+        .nav-item {
+            width: 48px;
+            height: 48px;
+            border-radius: var(--radius-md);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: var(--muted-foreground);
+            margin-bottom: 0.5rem;
+            transition: all 0.2s ease;
+            gap: 4px;
+        }
+
+        .nav-item:hover {
+            background-color: var(--muted);
+            color: var(--foreground);
+        }
+
+        .nav-item.active {
+            color: var(--foreground);
+            font-weight: 500;
+        }
+
+        .nav-item span {
+            font-size: 0.65rem;
+        }
+
+        .sidebar-bottom {
+            margin-top: auto;
+        }
+
+        /* === Secondary Sidebar (Task List) === */
+        .sidebar-secondary {
+            width: 300px;
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            background: #fafafa;
+            /* 极其轻微的灰色以区分主内容区 */
+            transition: margin-left 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+            position: relative;
+            z-index: 10;
+        }
+
+        .sidebar-secondary.collapsed {
+            margin-left: -300px;
+            /* 隐藏动画的核心 */
+        }
+
+        .task-header {
+            padding: 1.5rem 1.25rem 1rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .task-header h2 {
+            font-size: 0.875rem;
+            font-weight: 600;
+        }
+
+        .task-header-actions button {
+            color: var(--muted-foreground);
+            padding: 4px;
+            border-radius: 4px;
+        }
+
+        .task-header-actions button:hover {
+            background-color: var(--border);
+            color: var(--foreground);
+        }
+
+        .search-container {
+            padding: 0 1.25rem 1rem;
+        }
+
+        .search-box {
+            display: flex;
+            align-items: center;
+            background: var(--background);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md);
+            padding: 0.5rem;
+            gap: 0.5rem;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .search-box input {
+            border: none;
+            outline: none;
+            background: transparent;
+            width: 100%;
+            font-size: 0.875rem;
+            color: var(--foreground);
+        }
+
+        .search-box input::placeholder {
+            color: var(--muted-foreground);
+        }
+
+        .task-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 0 0.75rem;
+        }
+
+        .task-list::-webkit-scrollbar {
+            width: 4px;
+        }
+
+        .task-list::-webkit-scrollbar-thumb {
+            background-color: var(--border);
+            border-radius: 4px;
+        }
+
+        .task-item {
+            padding: 0.75rem;
+            border-radius: var(--radius-md);
+            cursor: pointer;
+            margin-bottom: 2px;
+            transition: background 0.2s;
+            display: flex;
+            gap: 0.75rem;
+            align-items: flex-start;
+        }
+
+        .task-item:hover {
+            background-color: var(--border);
+        }
+
+        .task-icon {
+            color: var(--muted-foreground);
+            margin-top: 2px;
+        }
+
+        .task-content {
+            overflow: hidden;
+        }
+
+        .task-title {
+            font-size: 0.875rem;
+            font-weight: 500;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            margin-bottom: 0.25rem;
+        }
+
+        .task-date {
+            font-size: 0.7rem;
+            color: var(--muted-foreground);
+        }
+
+        /* === Main Content === */
+        .main-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background-color: var(--background);
+            position: relative;
+        }
+
+        /* === Top Navigation === */
+        .top-nav {
+            height: 60px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 1.5rem;
+        }
+
+        .toggle-btn {
+            color: var(--muted-foreground);
+            padding: 0.5rem;
+            border-radius: var(--radius-md);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background 0.2s, color 0.2s;
+        }
+
+        .toggle-btn:hover {
+            background-color: var(--muted);
+            color: var(--foreground);
+        }
+
+        /* 去除广告，换成高级的按键和用户区 */
+        .top-actions {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .btn-upgrade {
+            background: var(--foreground);
+            color: var(--background);
+            font-size: 0.875rem;
+            font-weight: 500;
+            padding: 0.5rem 1rem;
+            border-radius: var(--radius-full);
+            transition: opacity 0.2s, transform 0.1s;
+        }
+
+        .btn-upgrade:hover {
+            opacity: 0.9;
+        }
+
+        .btn-upgrade:active {
+            transform: scale(0.96);
+        }
+
+        /* === Center Workspace === */
+        .workspace-center {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding-bottom: 10vh;
+            /* 视觉向上偏移 */
+        }
+
+        .workspace-title {
+            font-size: 2rem;
+            font-weight: 600;
+            letter-spacing: -0.02em;
+            margin-bottom: 2.5rem;
+            color: var(--foreground);
+        }
+
+        /* === Prompt Box (Core AI Input) === */
+        .prompt-wrapper {
+            width: 100%;
+            max-width: 760px;
+            background: var(--background);
+            border: 1px solid var(--border);
+            border-radius: 1rem;
+            box-shadow: var(--shadow-lg);
+            padding: 1rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+            transition: box-shadow 0.3s ease, border-color 0.3s ease;
+        }
+
+        .prompt-wrapper:focus-within {
+            border-color: #a1a1aa;
+            box-shadow: 0 10px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);
+        }
+
+        .prompt-input {
+            border: none;
+            outline: none;
+            font-size: 1rem;
+            color: var(--foreground);
+            width: 100%;
+            background: transparent;
+            resize: none;
+            min-height: 40px;
+            font-family: inherit;
+        }
+
+        .prompt-input::placeholder {
+            color: #a1a1aa;
+        }
+
+        .prompt-toolbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .toolbar-left,
+        .toolbar-right {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .btn-icon {
+            color: var(--muted-foreground);
+            padding: 0.5rem;
+            border-radius: var(--radius-full);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--muted);
+            transition: background 0.2s, color 0.2s;
+        }
+
+        .btn-icon:hover {
+            background: var(--border);
+            color: var(--foreground);
+        }
+
+        .btn-model-select {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.875rem;
+            font-weight: 500;
+            color: var(--foreground);
+            background: var(--muted);
+            padding: 0.4rem 0.75rem;
+            border-radius: var(--radius-full);
+            transition: background 0.2s;
+        }
+
+        .btn-model-select:hover {
+            background: var(--border);
+        }
+
+        .btn-speak {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            background: var(--foreground);
+            color: var(--background);
+            font-size: 0.875rem;
+            font-weight: 500;
+            padding: 0.5rem 1rem;
+            border-radius: var(--radius-full);
+            transition: opacity 0.2s, transform 0.1s;
+        }
+
+        .btn-speak:hover {
+            opacity: 0.9;
+        }
+
+        .btn-speak:active {
+            transform: scale(0.96);
+        }
+
+        /* === Tools Row === */
+        .tools-row {
+            display: flex;
+            gap: 2rem;
+            margin-top: 3rem;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        .tool-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.75rem;
+            cursor: pointer;
+            group;
+        }
+
+        .tool-icon-box {
+            width: 48px;
+            height: 48px;
+            border-radius: 12px;
+            background: var(--background);
+            border: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--foreground);
+            box-shadow: var(--shadow-sm);
+            transition: all 0.2s ease;
+        }
+
+        .tool-item:hover .tool-icon-box {
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-md);
+            border-color: #a1a1aa;
+        }
+
+        .tool-label {
+            font-size: 0.75rem;
+            font-weight: 500;
+            color: var(--muted-foreground);
+        }
+
+        .tool-item:hover .tool-label {
+            color: var(--foreground);
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="app-container">
+        <!-- 左侧最细的主导航栏 -->
+        <nav class="sidebar-primary">
+            <div class="logo-box">O</div>
+            <button class="nav-item">
+                <i data-lucide="plus" stroke-width="2.5" size="20"></i>
+                <span>New</span>
+            </button>
+            <button class="nav-item active">
+                <i data-lucide="home" stroke-width="2" size="20"></i>
+                <span>Home</span>
+            </button>
+            <button class="nav-item">
+                <i data-lucide="network" stroke-width="2" size="20"></i>
+                <span>Agents</span>
+            </button>
+            <button class="nav-item">
+                <i data-lucide="workflow" stroke-width="2" size="20"></i>
+                <span>Flows</span>
+            </button>
+            <button class="nav-item">
+                <i data-lucide="folder-open" stroke-width="2" size="20"></i>
+                <span>Drive</span>
+            </button>
+
+            <div class="sidebar-bottom">
+                <button class="nav-item">
+                    <i data-lucide="circle-user-round" stroke-width="2" size="24"></i>
+                </button>
+            </div>
+        </nav>
+
+        <!-- 左侧次级导航栏：任务/聊天列表 (具备折叠交互) -->
+        <aside class="sidebar-secondary" id="taskSidebar">
+            <div class="task-header">
+                <h2>Task List</h2>
+                <div class="task-header-actions">
+                    <button><i data-lucide="rotate-cw" size="16"></i></button>
+                    <button><i data-lucide="filter" size="16"></i></button>
+                </div>
+            </div>
+
+            <div class="search-container">
+                <div class="search-box">
+                    <i data-lucide="search" size="16" color="var(--muted-foreground)"></i>
+                    <input type="text" placeholder="Search Chats...">
+                </div>
+            </div>
+
+            <ul class="task-list">
+                <!-- 列表项 -->
+                <li class="task-item">
+                    <i data-lucide="file-text" size="16" class="task-icon"></i>
+                    <div class="task-content">
+                        <div class="task-title">Olympus Q3 Marketing Strategy Draft</div>
+                        <div class="task-date">Today</div>
+                    </div>
+                </li>
+                <li class="task-item">
+                    <i data-lucide="edit-3" size="16" class="task-icon"></i>
+                    <div class="task-content">
+                        <div class="task-title">Redesign landing page layout based on Shadcn</div>
+                        <div class="task-date">Mar 24</div>
+                    </div>
+                </li>
+                <li class="task-item">
+                    <i data-lucide="message-square" size="16" class="task-icon"></i>
+                    <div class="task-content">
+                        <div class="task-title">Brainstorming session for new AI features</div>
+                        <div class="task-date">Mar 22</div>
+                    </div>
+                </li>
+                <li class="task-item">
+                    <i data-lucide="presentation" size="16" class="task-icon"></i>
+                    <div class="task-content">
+                        <div class="task-title">Create a 20-page slide deck for investors</div>
+                        <div class="task-date">Mar 16</div>
+                    </div>
+                </li>
+                <li class="task-item">
+                    <i data-lucide="code" size="16" class="task-icon"></i>
+                    <div class="task-content">
+                        <div class="task-title">Generate Python script for data scraping</div>
+                        <div class="task-date">Feb 28</div>
+                    </div>
+                </li>
+            </ul>
+        </aside>
+
+        <!-- 主内容区 -->
+        <main class="main-content">
+            <!-- 顶部控制条 -->
+            <header class="top-nav">
+                <!-- 折叠控制按钮 -->
+                <button class="toggle-btn" id="toggleSidebarBtn">
+                    <i data-lucide="panel-left" size="20"></i>
+                </button>
+
+                <!-- 右侧高级操作区 (摒弃了花哨的广告) -->
+                <div class="top-actions">
+                    <button class="btn-upgrade">Upgrade Pro</button>
+                </div>
+            </header>
+
+            <!-- 核心交互区 -->
+            <div class="workspace-center">
+                <h1 class="workspace-title">Olympus AI Workspace</h1>
+
+                <!-- 核心输入框 -->
+                <div class="prompt-wrapper">
+                    <textarea class="prompt-input" placeholder="Ask anything, create anything..." rows="1"></textarea>
+
+                    <div class="prompt-toolbar">
+                        <div class="toolbar-left">
+                            <button class="btn-icon" title="Add Attachment">
+                                <i data-lucide="plus" size="18"></i>
+                            </button>
+                            <button class="btn-icon" title="Tools">
+                                <i data-lucide="wrench" size="18"></i>
+                            </button>
+                            <button class="btn-model-select">
+                                <i data-lucide="sparkles" size="14"></i>
+                                Standard
+                                <i data-lucide="chevron-down" size="14"></i>
+                            </button>
+                        </div>
+                        <div class="toolbar-right">
+                            <button class="btn-icon" title="Voice Input">
+                                <i data-lucide="mic" size="18"></i>
+                            </button>
+                            <button class="btn-speak">
+                                <i data-lucide="audio-lines" size="16"></i>
+                                Speak
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 底部工具矩阵 -->
+                <div class="tools-row">
+                    <div class="tool-item">
+                        <div class="tool-icon-box"><i data-lucide="presentation" size="20"></i></div>
+                        <span class="tool-label">AI Slides</span>
+                    </div>
+                    <div class="tool-item">
+                        <div class="tool-icon-box"><i data-lucide="table" size="20"></i></div>
+                        <span class="tool-label">AI Sheets</span>
+                    </div>
+                    <div class="tool-item">
+                        <div class="tool-icon-box"><i data-lucide="file-text" size="20"></i></div>
+                        <span class="tool-label">AI Docs</span>
+                    </div>
+                    <div class="tool-item">
+                        <div class="tool-icon-box"><i data-lucide="pen-tool" size="20"></i></div>
+                        <span class="tool-label">AI Designer</span>
+                    </div>
+                    <div class="tool-item">
+                        <div class="tool-icon-box"><i data-lucide="message-circle" size="20"></i></div>
+                        <span class="tool-label">AI Chat</span>
+                    </div>
+                    <div class="tool-item">
+                        <div class="tool-icon-box"><i data-lucide="image" size="20"></i></div>
+                        <span class="tool-label">AI Image</span>
+                    </div>
+                    <div class="tool-item">
+                        <div class="tool-icon-box"><i data-lucide="music" size="20"></i></div>
+                        <span class="tool-label">AI Music</span>
+                    </div>
+                </div>
+
+            </div>
+        </main>
+    </div>
+
+    <!-- JavaScript 交互逻辑 -->
+    <script>
+        // 初始化 Lucide 图标
+        lucide.createIcons();
+
+        // 侧边栏折叠/展开逻辑
+        const toggleBtn = document.getElementById('toggleSidebarBtn');
+        const taskSidebar = document.getElementById('taskSidebar');
+
+        toggleBtn.addEventListener('click', () => {
+            // 通过切换 class 实现 CSS 过渡动画
+            taskSidebar.classList.toggle('collapsed');
+
+            // 交互反馈：切换按钮的图标样式 (可选)
+            const icon = toggleBtn.querySelector('i');
+            if (taskSidebar.classList.contains('collapsed')) {
+                toggleBtn.style.color = 'var(--foreground)';
+                toggleBtn.style.backgroundColor = 'var(--muted)';
+            } else {
+                toggleBtn.style.color = 'var(--muted-foreground)';
+                toggleBtn.style.backgroundColor = 'transparent';
+            }
+        });
+
+        // 自动调整 textarea 高度逻辑（提升质感体验）
+        const textarea = document.querySelector('.prompt-input');
+        textarea.addEventListener('input', function () {
+            this.style.height = 'auto';
+            this.style.height = (this.scrollHeight) + 'px';
+            if (this.scrollHeight > 200) {
+                this.style.overflowY = 'auto';
+            } else {
+                this.style.overflowY = 'hidden';
+            }
+        });
+    </script>
+</body>
+
+</html>
