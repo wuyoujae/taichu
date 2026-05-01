@@ -15,6 +15,7 @@ Thumbs.db
 /app/backend/target/
 /app/backend/data/
 /app/backend/.env
+/app/frontend/taichu/.git.disabled/
 
 # Editor / IDE
 /.idea/
@@ -28,4 +29,3 @@ pnpm-debug.log*
 
 # OS / temp
 desktop.ini
-
