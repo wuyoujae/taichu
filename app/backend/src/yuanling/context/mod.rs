@@ -1,4 +1,7 @@
-use super::ai::{self, ChatComposeRequest, InputContentBlock, InputMessage};
+use super::{
+  ai::{self, ChatComposeRequest, InputContentBlock, InputMessage},
+  skills,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::env;
@@ -8,12 +11,12 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const CONTEXT_SESSION_VERSION: u32 = 1;
+const CONTEXT_STATE_VERSION: u32 = 1;
 const DEFAULT_MAX_TURNS: usize = 12;
 const DEFAULT_MAX_CONTEXT_TOKENS: usize = 12_000;
 const DEFAULT_KEEP_SYSTEM_PROMPT: bool = true;
-const DEFAULT_SESSION_ENABLED: bool = true;
-const DEFAULT_SESSION_TTL_MINUTES: usize = 30;
+const DEFAULT_STATE_ENABLED: bool = true;
+const DEFAULT_CONTEXT_TTL_MINUTES: usize = 30;
 const DEFAULT_AUTO_COMPACT_ENABLED: bool = true;
 const DEFAULT_AI_COMPACT_ENABLED: bool = true;
 const DEFAULT_COMPACT_MAX_OUTPUT_TOKENS: u32 = 1_200;
@@ -21,9 +24,9 @@ const DEFAULT_PRESERVE_RECENT_MESSAGES: usize = 4;
 const DEFAULT_ROTATE_AFTER_BYTES: u64 = 256 * 1024;
 const DEFAULT_MAX_ROTATED_FILES: usize = 3;
 const COMPACT_CONTINUATION_PREAMBLE: &str =
-  "This session is being continued from compacted context. The summary below covers earlier conversation history.\n\n";
+  "This Yuanling context is being continued from compacted context. The summary below covers earlier conversation history.\n\n";
 const DEFAULT_COMPACT_SYSTEM_PROMPT: &str =
-  "Summarize the earlier session context for a continuing AI agent. Preserve decisions, user intent, open tasks, tool results, files, constraints, and anything needed to resume without asking the user to repeat themselves. Return only the summary.";
+  "Summarize the earlier Yuanling context for a continuing AI agent. Preserve decisions, user intent, open tasks, tool results, files, constraints, and anything needed to resume without asking the user to repeat themselves. Return only the summary.";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -42,8 +45,8 @@ pub enum ContextExpireAction {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextModuleConfig {
   pub enabled: bool,
-  pub session_enabled: bool,
-  pub session_ttl_minutes: usize,
+  pub state_enabled: bool,
+  pub context_ttl_minutes: usize,
   pub retention_mode: ContextRetentionMode,
   pub max_turns: usize,
   pub max_tokens: usize,
@@ -66,8 +69,8 @@ impl Default for ContextModuleConfig {
   fn default() -> Self {
     Self {
       enabled: true,
-      session_enabled: DEFAULT_SESSION_ENABLED,
-      session_ttl_minutes: DEFAULT_SESSION_TTL_MINUTES,
+      state_enabled: DEFAULT_STATE_ENABLED,
+      context_ttl_minutes: DEFAULT_CONTEXT_TTL_MINUTES,
       retention_mode: ContextRetentionMode::TailTurns,
       max_turns: DEFAULT_MAX_TURNS,
       max_tokens: DEFAULT_MAX_CONTEXT_TOKENS,
@@ -92,8 +95,8 @@ impl ContextModuleConfig {
   pub fn view(&self) -> ContextModuleConfigView {
     ContextModuleConfigView {
       enabled: self.enabled,
-      session_enabled: self.session_enabled,
-      session_ttl_minutes: self.session_ttl_minutes,
+      state_enabled: self.state_enabled,
+      context_ttl_minutes: self.context_ttl_minutes,
       retention_mode: self.retention_mode.clone(),
       max_turns: self.max_turns,
       max_tokens: self.max_tokens,
@@ -117,8 +120,8 @@ impl ContextModuleConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextModuleConfigView {
   pub enabled: bool,
-  pub session_enabled: bool,
-  pub session_ttl_minutes: usize,
+  pub state_enabled: bool,
+  pub context_ttl_minutes: usize,
   pub retention_mode: ContextRetentionMode,
   pub max_turns: usize,
   pub max_tokens: usize,
@@ -247,41 +250,41 @@ pub struct ContextPromptEntry {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ContextFork {
-  pub parent_session_id: String,
+pub struct ContextLineage {
+  pub parent_yuanling_id: String,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub branch_name: Option<String>,
-  pub forked_at_ms: u64,
+  pub cloned_at_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ContextSession {
+pub struct YuanlingContext {
   pub version: u32,
-  pub session_id: String,
+  pub yuanling_id: String,
   pub created_at_ms: u64,
   pub updated_at_ms: u64,
   pub messages: Vec<ContextMessage>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub compaction: Option<ContextCompaction>,
   #[serde(skip_serializing_if = "Option::is_none")]
-  pub fork: Option<ContextFork>,
+  pub lineage: Option<ContextLineage>,
   pub prompt_history: Vec<ContextPromptEntry>,
   pub usage_summary: ContextUsageSummary,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub model: Option<String>,
 }
 
-impl ContextSession {
-  pub fn new(session_id: impl Into<String>) -> Self {
+impl YuanlingContext {
+  pub fn new(yuanling_id: impl Into<String>) -> Self {
     let now = current_time_millis();
     Self {
-      version: CONTEXT_SESSION_VERSION,
-      session_id: session_id.into(),
+      version: CONTEXT_STATE_VERSION,
+      yuanling_id: yuanling_id.into(),
       created_at_ms: now,
       updated_at_ms: now,
       messages: Vec::new(),
       compaction: None,
-      fork: None,
+      lineage: None,
       prompt_history: Vec::new(),
       usage_summary: ContextUsageSummary::default(),
       model: None,
@@ -310,7 +313,7 @@ pub struct ContextCompactionEvent {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ContextBuildResult {
-  pub session_id: String,
+  pub yuanling_id: String,
   pub messages: Vec<ContextMessage>,
   pub estimated_tokens: usize,
   pub usage_summary: ContextUsageSummary,
@@ -327,14 +330,14 @@ pub struct ContextCompactionResult {
   pub estimated_tokens_after: usize,
   pub summary_source: ContextSummarySource,
   pub health_report: ContextHealthReport,
-  pub session: ContextSession,
+  pub context: YuanlingContext,
 }
 
 #[derive(Debug)]
 pub enum ContextError {
   Io(std::io::Error),
   Json(serde_json::Error),
-  InvalidSessionId(String),
+  InvalidYuanlingId(String),
   InvalidRecord(String),
   HealthCheckFailed(ContextHealthReport),
 }
@@ -344,8 +347,8 @@ impl Display for ContextError {
     match self {
       Self::Io(error) => write!(formatter, "{error}"),
       Self::Json(error) => write!(formatter, "{error}"),
-      Self::InvalidSessionId(session_id) => {
-        write!(formatter, "invalid context session id: {session_id}")
+      Self::InvalidYuanlingId(yuanling_id) => {
+        write!(formatter, "invalid yuanling context id: {yuanling_id}")
       }
       Self::InvalidRecord(message) => write!(formatter, "{message}"),
       Self::HealthCheckFailed(report) => {
@@ -374,10 +377,10 @@ pub fn resolve_from_env() -> ContextModuleConfig {
 
   ContextModuleConfig {
     enabled: env_or_bool("YUANLING_CONTEXT_ENABLED", true),
-    session_enabled: env_or_bool("YUANLING_CONTEXT_SESSION_ENABLED", DEFAULT_SESSION_ENABLED),
-    session_ttl_minutes: env_or_usize(
-      "YUANLING_CONTEXT_SESSION_TTL_MINUTES",
-      DEFAULT_SESSION_TTL_MINUTES,
+    state_enabled: env_or_bool("YUANLING_CONTEXT_STATE_ENABLED", DEFAULT_STATE_ENABLED),
+    context_ttl_minutes: env_or_usize(
+      "YUANLING_CONTEXT_TTL_MINUTES",
+      DEFAULT_CONTEXT_TTL_MINUTES,
     ),
     retention_mode: resolve_retention_mode(),
     max_turns: env_or_usize("YUANLING_CONTEXT_MAX_TURNS", DEFAULT_MAX_TURNS),
@@ -422,145 +425,145 @@ pub fn resolve_from_env() -> ContextModuleConfig {
   }
 }
 
-pub fn load_session(
-  session_id: &str,
+pub fn load_context(
+  yuanling_id: &str,
   config: &ContextModuleConfig,
-) -> Result<ContextSession, ContextError> {
-  validate_session_id(session_id)?;
-  let path = session_path(session_id, config)?;
+) -> Result<YuanlingContext, ContextError> {
+  validate_yuanling_id(yuanling_id)?;
+  let path = context_path(yuanling_id, config)?;
   if !path.exists() {
-    return Ok(ContextSession::new(session_id));
+    return Ok(YuanlingContext::new(yuanling_id));
   }
 
   let contents = fs::read_to_string(&path)?;
-  let session = parse_session_jsonl(session_id, &contents)?;
-  if is_session_expired(&session, config) {
+  let context = parse_context_jsonl(yuanling_id, &contents)?;
+  if is_context_expired(&context, config) {
     if matches!(config.expire_action, ContextExpireAction::Archive) {
-      archive_expired_session_file(&path)?;
+      archive_expired_context_file(&path)?;
     }
-    return Ok(ContextSession::new(session_id));
+    return Ok(YuanlingContext::new(yuanling_id));
   }
 
-  Ok(session)
+  Ok(context)
 }
 
-pub fn save_session(
-  session: &ContextSession,
+pub fn save_context(
+  context: &YuanlingContext,
   config: &ContextModuleConfig,
 ) -> Result<(), ContextError> {
-  validate_session_id(&session.session_id)?;
+  validate_yuanling_id(&context.yuanling_id)?;
   fs::create_dir_all(&config.storage_dir)?;
-  let path = session_path(&session.session_id, config)?;
-  rotate_session_file_if_needed(&path, config)?;
-  fs::write(path, render_session_jsonl(session)?)?;
+  let path = context_path(&context.yuanling_id, config)?;
+  rotate_context_file_if_needed(&path, config)?;
+  fs::write(path, render_context_jsonl(context)?)?;
   Ok(())
 }
 
 pub fn append_message(
-  session_id: &str,
+  yuanling_id: &str,
   message: ContextMessage,
   config: &ContextModuleConfig,
-) -> Result<ContextSession, ContextError> {
-  let mut session = load_session(session_id, config)?;
-  let path = session_path(session_id, config)?;
+) -> Result<YuanlingContext, ContextError> {
+  let mut context = load_context(yuanling_id, config)?;
+  let path = context_path(yuanling_id, config)?;
   let should_snapshot = !path.exists() || path.metadata().map(|meta| meta.len() == 0).unwrap_or(true);
 
-  session.usage_summary.record(message.usage);
-  session.messages.push(message.clone());
-  session.touch();
+  context.usage_summary.record(message.usage);
+  context.messages.push(message.clone());
+  context.touch();
 
-  if should_snapshot || rotate_session_file_if_needed(&path, config)? {
-    save_session(&session, config)?;
+  if should_snapshot || rotate_context_file_if_needed(&path, config)? {
+    save_context(&context, config)?;
   } else {
     append_jsonl_record(
       &path,
       json!({
         "type": "message",
-        "updated_at_ms": session.updated_at_ms,
+        "updated_at_ms": context.updated_at_ms,
         "usage_delta": message.usage,
         "message": message,
       }),
     )?;
   }
 
-  Ok(session)
+  Ok(context)
 }
 
 pub fn append_prompt_entry(
-  session_id: &str,
+  yuanling_id: &str,
   text: impl Into<String>,
   config: &ContextModuleConfig,
-) -> Result<ContextSession, ContextError> {
-  let mut session = load_session(session_id, config)?;
-  let path = session_path(session_id, config)?;
+) -> Result<YuanlingContext, ContextError> {
+  let mut context = load_context(yuanling_id, config)?;
+  let path = context_path(yuanling_id, config)?;
   let should_snapshot = !path.exists() || path.metadata().map(|meta| meta.len() == 0).unwrap_or(true);
   let entry = ContextPromptEntry {
     timestamp_ms: current_time_millis(),
     text: text.into(),
   };
 
-  session.prompt_history.push(entry.clone());
-  session.touch();
+  context.prompt_history.push(entry.clone());
+  context.touch();
 
-  if should_snapshot || rotate_session_file_if_needed(&path, config)? {
-    save_session(&session, config)?;
+  if should_snapshot || rotate_context_file_if_needed(&path, config)? {
+    save_context(&context, config)?;
   } else {
     append_jsonl_record(
       &path,
       json!({
         "type": "prompt_history",
-        "updated_at_ms": session.updated_at_ms,
+        "updated_at_ms": context.updated_at_ms,
         "entry": entry,
       }),
     )?;
   }
 
-  Ok(session)
+  Ok(context)
 }
 
-pub fn fork_session(
-  parent_session_id: &str,
-  new_session_id: &str,
+pub fn clone_context(
+  parent_yuanling_id: &str,
+  new_yuanling_id: &str,
   branch_name: Option<String>,
   config: &ContextModuleConfig,
-) -> Result<ContextSession, ContextError> {
-  validate_session_id(parent_session_id)?;
-  validate_session_id(new_session_id)?;
-  let parent = load_session(parent_session_id, config)?;
+) -> Result<YuanlingContext, ContextError> {
+  validate_yuanling_id(parent_yuanling_id)?;
+  validate_yuanling_id(new_yuanling_id)?;
+  let parent = load_context(parent_yuanling_id, config)?;
   let now = current_time_millis();
-  let mut forked = parent.clone();
-  forked.session_id = new_session_id.to_string();
-  forked.created_at_ms = now;
-  forked.updated_at_ms = now;
-  forked.fork = Some(ContextFork {
-    parent_session_id: parent_session_id.to_string(),
+  let mut cloned = parent.clone();
+  cloned.yuanling_id = new_yuanling_id.to_string();
+  cloned.created_at_ms = now;
+  cloned.updated_at_ms = now;
+  cloned.lineage = Some(ContextLineage {
+    parent_yuanling_id: parent_yuanling_id.to_string(),
     branch_name: branch_name.filter(|value| !value.trim().is_empty()),
-    forked_at_ms: now,
+    cloned_at_ms: now,
   });
-  save_session(&forked, config)?;
-  Ok(forked)
+  save_context(&cloned, config)?;
+  Ok(cloned)
 }
 
 pub async fn build_context(
-  session_id: &str,
+  yuanling_id: &str,
   config: &ContextModuleConfig,
 ) -> Result<ContextBuildResult, ContextError> {
-  let session = load_session(session_id, config)?;
-  let estimated_tokens_before = estimate_session_tokens(&session);
+  let context = load_context(yuanling_id, config)?;
+  let estimated_tokens_before = estimate_context_tokens(&context);
 
-  if !config.enabled || !config.session_enabled || !should_compact(&session, config) {
-    return Ok(build_result(session, config, estimated_tokens_before, None));
+  if !config.enabled || !config.state_enabled || !should_compact(&context, config) {
+    return Ok(build_result(context, config, estimated_tokens_before, None));
   }
 
   let compaction_result = if config.ai_compact_enabled {
     let ai_config = ai::resolve_from_env();
-    compact_session_with_ai(&session, config, &ai_config).await?
+    compact_context_with_ai(&context, config, &ai_config).await?
   } else {
-    compact_session(&session, config)?
+    compact_context(&context, config)?
   };
 
   if compaction_result.compacted {
-    save_session(&compaction_result.session, config)?;
+    save_context(&compaction_result.context, config)?;
   }
 
   let estimated_tokens_after = compaction_result.estimated_tokens_after;
@@ -572,49 +575,49 @@ pub async fn build_context(
     health_report: compaction_result.health_report.clone(),
   };
   Ok(build_result(
-    compaction_result.session,
+    compaction_result.context,
     config,
     estimated_tokens_after,
     Some(event),
   ))
 }
 
-pub fn compact_session(
-  session: &ContextSession,
+pub fn compact_context(
+  context: &YuanlingContext,
   config: &ContextModuleConfig,
 ) -> Result<ContextCompactionResult, ContextError> {
-  compact_session_with_summary(session, config, None)
+  compact_context_with_summary(context, config, None)
 }
 
-pub async fn compact_session_with_ai(
-  session: &ContextSession,
+pub async fn compact_context_with_ai(
+  context: &YuanlingContext,
   config: &ContextModuleConfig,
   ai_config: &ai::AiModuleConfig,
 ) -> Result<ContextCompactionResult, ContextError> {
-  if !should_compact(session, config) {
-    return compact_session(session, config);
+  if !should_compact(context, config) {
+    return compact_context(context, config);
   }
 
-  match request_ai_compact_summary(session, config, ai_config).await {
-    Some(summary) => match compact_session_with_summary(
-      session,
+  match request_ai_compact_summary(context, config, ai_config).await {
+    Some(summary) => match compact_context_with_summary(
+      context,
       config,
       Some((summary, ContextSummarySource::Ai)),
     ) {
       Ok(result) => Ok(result),
-      Err(_) => compact_session(session, config),
+      Err(_) => compact_context(context, config),
     },
-    None => compact_session(session, config),
+    None => compact_context(context, config),
   }
 }
 
-pub fn compact_session_with_summary(
-  session: &ContextSession,
+pub fn compact_context_with_summary(
+  context: &YuanlingContext,
   config: &ContextModuleConfig,
   summary_override: Option<(String, ContextSummarySource)>,
 ) -> Result<ContextCompactionResult, ContextError> {
-  let estimated_tokens_before = estimate_session_tokens(session);
-  let Some(window) = compaction_window(session, config) else {
+  let estimated_tokens_before = estimate_context_tokens(context);
+  let Some(window) = compaction_window(context, config) else {
     return Ok(ContextCompactionResult {
       compacted: false,
       removed_message_count: 0,
@@ -625,13 +628,13 @@ pub fn compact_session_with_summary(
         healthy: true,
         errors: vec![],
       },
-      session: session.clone(),
+      context: context.clone(),
     });
   };
 
-  let removed_messages = &session.messages[window.remove_start..window.keep_from];
-  let preserved_messages = session.messages[window.keep_from..].to_vec();
-  let existing_summary = session
+  let removed_messages = &context.messages[window.remove_start..window.keep_from];
+  let preserved_messages = context.messages[window.keep_from..].to_vec();
+  let existing_summary = context
     .messages
     .first()
     .and_then(extract_existing_compacted_summary);
@@ -654,21 +657,21 @@ pub fn compact_session_with_summary(
   }];
   compacted_messages.extend(preserved_messages);
 
-  let mut compacted_session = session.clone();
-  compacted_session.messages = compacted_messages;
-  compacted_session.touch();
-  compacted_session.compaction = Some(ContextCompaction {
-    count: session.compaction.as_ref().map_or(1, |value| value.count + 1),
+  let mut compacted_context = context.clone();
+  compacted_context.messages = compacted_messages;
+  compacted_context.touch();
+  compacted_context.compaction = Some(ContextCompaction {
+    count: context.compaction.as_ref().map_or(1, |value| value.count + 1),
     removed_message_count: removed_messages.len(),
     summary,
     summary_source,
     compacted_at_ms: current_time_millis(),
   });
 
-  let estimated_tokens_after = estimate_session_tokens(&compacted_session);
+  let estimated_tokens_after = estimate_context_tokens(&compacted_context);
   let health_report = run_compaction_health_check(
-    session,
-    &compacted_session,
+    context,
+    &compacted_context,
     removed_messages.len(),
     estimated_tokens_before,
     estimated_tokens_after,
@@ -681,45 +684,60 @@ pub fn compact_session_with_summary(
     estimated_tokens_after,
     summary_source,
     health_report,
-    session: compacted_session,
+    context: compacted_context,
   })
 }
 
-pub fn should_compact(session: &ContextSession, config: &ContextModuleConfig) -> bool {
+pub fn should_compact(context: &YuanlingContext, config: &ContextModuleConfig) -> bool {
   if !config.auto_compact_enabled {
     return false;
   }
-  compaction_window(session, config).is_some()
+  compaction_window(context, config).is_some()
 }
 
-pub fn estimate_session_tokens(session: &ContextSession) -> usize {
-  session.messages.iter().map(estimate_message_tokens).sum()
+pub fn estimate_context_tokens(context: &YuanlingContext) -> usize {
+  context.messages.iter().map(estimate_message_tokens).sum()
 }
 
-pub fn is_session_expired(session: &ContextSession, config: &ContextModuleConfig) -> bool {
-  if config.session_ttl_minutes == 0 {
+pub fn is_context_expired(context: &YuanlingContext, config: &ContextModuleConfig) -> bool {
+  if config.context_ttl_minutes == 0 {
     return false;
   }
-  let ttl_ms = u64::try_from(config.session_ttl_minutes)
+  let ttl_ms = u64::try_from(config.context_ttl_minutes)
     .unwrap_or(u64::MAX)
     .saturating_mul(60_000);
-  current_time_millis().saturating_sub(session.updated_at_ms) > ttl_ms
+  current_time_millis().saturating_sub(context.updated_at_ms) > ttl_ms
 }
 
 fn build_result(
-  session: ContextSession,
+  context: YuanlingContext,
   config: &ContextModuleConfig,
   estimated_tokens: usize,
   compaction: Option<ContextCompactionEvent>,
 ) -> ContextBuildResult {
+  let mut messages = context.messages;
+  if let Some(injection) = build_skills_context_injection() {
+    messages.insert(0, ContextMessage::text(ContextRole::System, injection));
+  }
+  let estimated_tokens = if messages.is_empty() {
+    estimated_tokens
+  } else {
+    messages.iter().map(estimate_message_tokens).sum()
+  };
+
   ContextBuildResult {
-    session_id: session.session_id,
-    messages: session.messages,
+    yuanling_id: context.yuanling_id,
+    messages,
     estimated_tokens,
-    usage_summary: session.usage_summary,
-    cost_estimate: estimate_cost(session.usage_summary, config),
+    usage_summary: context.usage_summary,
+    cost_estimate: estimate_cost(context.usage_summary, config),
     compaction,
   }
+}
+
+fn build_skills_context_injection() -> Option<String> {
+  let config = skills::resolve_from_env();
+  skills::build_context_injection(&config).ok().flatten()
 }
 
 fn estimate_cost(
@@ -737,33 +755,33 @@ fn estimate_cost(
   }
 }
 
-fn render_session_jsonl(session: &ContextSession) -> Result<String, ContextError> {
+fn render_context_jsonl(context: &YuanlingContext) -> Result<String, ContextError> {
   let mut records = vec![json!({
-    "type": "session_meta",
-    "version": session.version,
-    "session_id": session.session_id,
-    "created_at_ms": session.created_at_ms,
-    "updated_at_ms": session.updated_at_ms,
-    "fork": session.fork,
-    "usage_summary": session.usage_summary,
-    "model": session.model,
+    "type": "context_meta",
+    "version": context.version,
+    "yuanling_id": context.yuanling_id,
+    "created_at_ms": context.created_at_ms,
+    "updated_at_ms": context.updated_at_ms,
+    "lineage": context.lineage,
+    "usage_summary": context.usage_summary,
+    "model": context.model,
   })];
 
-  if let Some(compaction) = &session.compaction {
+  if let Some(compaction) = &context.compaction {
     records.push(json!({
       "type": "compaction",
       "compaction": compaction,
     }));
   }
 
-  records.extend(session.prompt_history.iter().map(|entry| {
+  records.extend(context.prompt_history.iter().map(|entry| {
     json!({
       "type": "prompt_history",
       "entry": entry,
     })
   }));
 
-  records.extend(session.messages.iter().map(|message| {
+  records.extend(context.messages.iter().map(|message| {
     json!({
       "type": "message",
       "message": message,
@@ -779,11 +797,11 @@ fn render_session_jsonl(session: &ContextSession) -> Result<String, ContextError
   Ok(rendered)
 }
 
-fn parse_session_jsonl(session_id: &str, contents: &str) -> Result<ContextSession, ContextError> {
-  let mut session = ContextSession::new(session_id);
+fn parse_context_jsonl(yuanling_id: &str, contents: &str) -> Result<YuanlingContext, ContextError> {
+  let mut context = YuanlingContext::new(yuanling_id);
   let mut saw_meta = false;
   let mut saw_usage_summary = false;
-  session.messages.clear();
+  context.messages.clear();
 
   for (index, raw_line) in contents.lines().enumerate() {
     let line = raw_line.trim();
@@ -798,44 +816,44 @@ fn parse_session_jsonl(session_id: &str, contents: &str) -> Result<ContextSessio
       .ok_or_else(|| ContextError::InvalidRecord(format!("line {} missing type", index + 1)))?;
 
     match record_type {
-      "session_meta" => {
-        let parsed_session_id = value
-          .get("session_id")
+      "context_meta" => {
+        let parsed_yuanling_id = value
+          .get("yuanling_id")
           .and_then(Value::as_str)
-          .unwrap_or(session_id)
+          .unwrap_or(yuanling_id)
           .to_string();
-        if parsed_session_id != session_id {
+        if parsed_yuanling_id != yuanling_id {
           return Err(ContextError::InvalidRecord(format!(
-            "line {} session id mismatch",
+            "line {} context id mismatch",
             index + 1
           )));
         }
-        session.version = value
+        context.version = value
           .get("version")
           .and_then(Value::as_u64)
           .and_then(|value| u32::try_from(value).ok())
-          .unwrap_or(CONTEXT_SESSION_VERSION);
-        session.session_id = parsed_session_id;
-        session.created_at_ms = value
+          .unwrap_or(CONTEXT_STATE_VERSION);
+        context.yuanling_id = parsed_yuanling_id;
+        context.created_at_ms = value
           .get("created_at_ms")
           .and_then(Value::as_u64)
-          .unwrap_or(session.created_at_ms);
-        session.updated_at_ms = value
+          .unwrap_or(context.created_at_ms);
+        context.updated_at_ms = value
           .get("updated_at_ms")
           .and_then(Value::as_u64)
-          .unwrap_or(session.updated_at_ms);
-        session.fork = value
-          .get("fork")
+          .unwrap_or(context.updated_at_ms);
+        context.lineage = value
+          .get("lineage")
           .filter(|value| !value.is_null())
           .map(|value| serde_json::from_value(value.clone()))
           .transpose()?;
-        session.usage_summary = value
+        context.usage_summary = value
           .get("usage_summary")
           .map(|value| serde_json::from_value(value.clone()))
           .transpose()?
           .unwrap_or_default();
         saw_usage_summary = value.get("usage_summary").is_some();
-        session.model = value
+        context.model = value
           .get("model")
           .and_then(Value::as_str)
           .map(ToOwned::to_owned);
@@ -849,14 +867,14 @@ fn parse_session_jsonl(session_id: &str, contents: &str) -> Result<ContextSessio
           })
           .and_then(|value| serde_json::from_value(value.clone()).map_err(ContextError::from))?;
         if let Some(updated_at_ms) = value.get("updated_at_ms").and_then(Value::as_u64) {
-          session.updated_at_ms = updated_at_ms;
+          context.updated_at_ms = updated_at_ms;
         }
         if let Some(usage_delta) = value.get("usage_delta").filter(|value| !value.is_null()) {
           let usage_delta = serde_json::from_value(usage_delta.clone())?;
-          session.usage_summary.record(Some(usage_delta));
+          context.usage_summary.record(Some(usage_delta));
           saw_usage_summary = true;
         }
-        session.messages.push(message);
+        context.messages.push(message);
       }
       "compaction" => {
         let compaction = value
@@ -865,7 +883,7 @@ fn parse_session_jsonl(session_id: &str, contents: &str) -> Result<ContextSessio
             ContextError::InvalidRecord(format!("line {} missing compaction", index + 1))
           })
           .and_then(|value| serde_json::from_value(value.clone()).map_err(ContextError::from))?;
-        session.compaction = Some(compaction);
+        context.compaction = Some(compaction);
       }
       "prompt_history" => {
         let entry = value
@@ -876,9 +894,9 @@ fn parse_session_jsonl(session_id: &str, contents: &str) -> Result<ContextSessio
           })
           .and_then(|value| serde_json::from_value(value.clone()).map_err(ContextError::from))?;
         if let Some(updated_at_ms) = value.get("updated_at_ms").and_then(Value::as_u64) {
-          session.updated_at_ms = updated_at_ms;
+          context.updated_at_ms = updated_at_ms;
         }
-        session.prompt_history.push(entry);
+        context.prompt_history.push(entry);
       }
       other => {
         return Err(ContextError::InvalidRecord(format!(
@@ -890,13 +908,13 @@ fn parse_session_jsonl(session_id: &str, contents: &str) -> Result<ContextSessio
   }
 
   if !saw_meta {
-    session.touch();
+    context.touch();
   }
   if !saw_usage_summary {
-    session.usage_summary = summarize_usage(&session.messages);
+    context.usage_summary = summarize_usage(&context.messages);
   }
 
-  Ok(session)
+  Ok(context)
 }
 
 fn summarize_usage(messages: &[ContextMessage]) -> ContextUsageSummary {
@@ -913,7 +931,7 @@ fn append_jsonl_record(path: &Path, record: Value) -> Result<(), ContextError> {
   Ok(())
 }
 
-fn rotate_session_file_if_needed(
+fn rotate_context_file_if_needed(
   path: &Path,
   config: &ContextModuleConfig,
 ) -> Result<bool, ContextError> {
@@ -925,7 +943,7 @@ fn rotate_session_file_if_needed(
   }
 
   for index in (1..=config.max_rotated_files).rev() {
-    let current = rotated_session_path(path, index);
+    let current = rotated_context_path(path, index);
     if index == config.max_rotated_files {
       if current.exists() {
         fs::remove_file(&current)?;
@@ -934,27 +952,27 @@ fn rotate_session_file_if_needed(
     }
 
     if current.exists() {
-      fs::rename(&current, rotated_session_path(path, index + 1))?;
+      fs::rename(&current, rotated_context_path(path, index + 1))?;
     }
   }
 
-  fs::rename(path, rotated_session_path(path, 1))?;
+  fs::rename(path, rotated_context_path(path, 1))?;
   Ok(true)
 }
 
-fn rotated_session_path(path: &Path, index: usize) -> PathBuf {
+fn rotated_context_path(path: &Path, index: usize) -> PathBuf {
   let parent = path.parent().unwrap_or_else(|| Path::new(""));
-  let stem = path.file_stem().and_then(|value| value.to_str()).unwrap_or("session");
+  let stem = path.file_stem().and_then(|value| value.to_str()).unwrap_or("context");
   let extension = path.extension().and_then(|value| value.to_str()).unwrap_or("jsonl");
   parent.join(format!("{stem}.{index}.{extension}"))
 }
 
-fn archive_expired_session_file(path: &Path) -> Result<(), ContextError> {
+fn archive_expired_context_file(path: &Path) -> Result<(), ContextError> {
   if !path.exists() {
     return Ok(());
   }
   let parent = path.parent().unwrap_or_else(|| Path::new(""));
-  let stem = path.file_stem().and_then(|value| value.to_str()).unwrap_or("session");
+  let stem = path.file_stem().and_then(|value| value.to_str()).unwrap_or("context");
   let extension = path.extension().and_then(|value| value.to_str()).unwrap_or("jsonl");
   let archive_path = parent.join(format!(
     "{stem}.expired.{}.{}",
@@ -972,22 +990,22 @@ struct CompactionWindow {
 }
 
 fn compaction_window(
-  session: &ContextSession,
+  context: &YuanlingContext,
   config: &ContextModuleConfig,
 ) -> Option<CompactionWindow> {
   if !config.auto_compact_enabled {
     return None;
   }
 
-  let summary_prefix_len = compacted_summary_prefix_len(session);
+  let summary_prefix_len = compacted_summary_prefix_len(context);
   let mut keep_from: Option<usize> = None;
 
   if matches!(config.retention_mode, ContextRetentionMode::TailTurns) {
-    keep_from = turn_retention_boundary(session, config, summary_prefix_len);
+    keep_from = turn_retention_boundary(context, config, summary_prefix_len);
   }
 
-  if estimate_session_tokens(session) >= config.compact_threshold_tokens {
-    let token_keep_from = session
+  if estimate_context_tokens(context) >= config.compact_threshold_tokens {
+    let token_keep_from = context
       .messages
       .len()
       .saturating_sub(config.preserve_recent_messages)
@@ -996,8 +1014,8 @@ fn compaction_window(
   }
 
   let keep_from = keep_from?;
-  let keep_from = safe_compaction_boundary(session, keep_from, summary_prefix_len);
-  if keep_from <= summary_prefix_len || keep_from >= session.messages.len() {
+  let keep_from = safe_compaction_boundary(context, keep_from, summary_prefix_len);
+  if keep_from <= summary_prefix_len || keep_from >= context.messages.len() {
     return None;
   }
 
@@ -1008,7 +1026,7 @@ fn compaction_window(
 }
 
 fn turn_retention_boundary(
-  session: &ContextSession,
+  context: &YuanlingContext,
   config: &ContextModuleConfig,
   summary_prefix_len: usize,
 ) -> Option<usize> {
@@ -1017,8 +1035,8 @@ fn turn_retention_boundary(
   }
 
   let mut user_turns = 0usize;
-  for index in (summary_prefix_len..session.messages.len()).rev() {
-    if session.messages[index].role == ContextRole::User {
+  for index in (summary_prefix_len..context.messages.len()).rev() {
+    if context.messages[index].role == ContextRole::User {
       user_turns += 1;
       if user_turns == config.max_turns {
         return Some(index);
@@ -1030,8 +1048,8 @@ fn turn_retention_boundary(
 }
 
 fn run_compaction_health_check(
-  original: &ContextSession,
-  compacted: &ContextSession,
+  original: &YuanlingContext,
+  compacted: &YuanlingContext,
   removed_message_count: usize,
   estimated_tokens_before: usize,
   estimated_tokens_after: usize,
@@ -1094,12 +1112,12 @@ fn first_tool_pair_error(messages: &[ContextMessage]) -> Option<String> {
 }
 
 async fn request_ai_compact_summary(
-  session: &ContextSession,
+  context: &YuanlingContext,
   config: &ContextModuleConfig,
   ai_config: &ai::AiModuleConfig,
 ) -> Option<String> {
-  let window = compaction_window(session, config)?;
-  let removed_messages = &session.messages[window.remove_start..window.keep_from];
+  let window = compaction_window(context, config)?;
+  let removed_messages = &context.messages[window.remove_start..window.keep_from];
   let transcript = format_compact_transcript(removed_messages);
   let request = ChatComposeRequest {
     model: None,
@@ -1107,7 +1125,7 @@ async fn request_ai_compact_summary(
     messages: vec![InputMessage {
       role: "user".to_string(),
       content: vec![InputContentBlock::Text {
-        text: format!("Summarize this earlier session transcript:\n\n{transcript}"),
+        text: format!("Summarize this earlier context transcript:\n\n{transcript}"),
       }],
     }],
     user_input: None,
@@ -1347,14 +1365,14 @@ fn format_compact_summary(summary: &str) -> String {
 }
 
 fn safe_compaction_boundary(
-  session: &ContextSession,
+  context: &YuanlingContext,
   raw_keep_from: usize,
   summary_prefix_len: usize,
 ) -> usize {
   let mut keep_from = raw_keep_from;
-  while keep_from > summary_prefix_len && starts_with_tool_result(&session.messages[keep_from]) {
+  while keep_from > summary_prefix_len && starts_with_tool_result(&context.messages[keep_from]) {
     keep_from = keep_from.saturating_sub(1);
-    if has_tool_use(&session.messages[keep_from]) {
+    if has_tool_use(&context.messages[keep_from]) {
       break;
     }
   }
@@ -1375,9 +1393,9 @@ fn has_tool_use(message: &ContextMessage) -> bool {
     .any(|block| matches!(block, ContextBlock::ToolUse { .. }))
 }
 
-fn compacted_summary_prefix_len(session: &ContextSession) -> usize {
+fn compacted_summary_prefix_len(context: &YuanlingContext) -> usize {
   usize::from(
-    session
+    context
       .messages
       .first()
       .and_then(extract_existing_compacted_summary)
@@ -1451,21 +1469,21 @@ fn collapse_blank_lines(content: &str) -> String {
   result
 }
 
-fn session_path(session_id: &str, config: &ContextModuleConfig) -> Result<PathBuf, ContextError> {
-  validate_session_id(session_id)?;
-  Ok(Path::new(&config.storage_dir).join(format!("{session_id}.jsonl")))
+fn context_path(yuanling_id: &str, config: &ContextModuleConfig) -> Result<PathBuf, ContextError> {
+  validate_yuanling_id(yuanling_id)?;
+  Ok(Path::new(&config.storage_dir).join(format!("{yuanling_id}.jsonl")))
 }
 
-fn validate_session_id(session_id: &str) -> Result<(), ContextError> {
-  let valid = !session_id.trim().is_empty()
-    && session_id
+fn validate_yuanling_id(yuanling_id: &str) -> Result<(), ContextError> {
+  let valid = !yuanling_id.trim().is_empty()
+    && yuanling_id
       .chars()
       .all(|value| value.is_ascii_alphanumeric() || matches!(value, '-' | '_'));
 
   if valid {
     Ok(())
   } else {
-    Err(ContextError::InvalidSessionId(session_id.to_string()))
+    Err(ContextError::InvalidYuanlingId(yuanling_id.to_string()))
   }
 }
 
@@ -1474,7 +1492,7 @@ fn default_storage_dir() -> String {
   Path::new(&data_dir)
     .join("yuanling")
     .join("context")
-    .join("sessions")
+    .join("yuanlings")
     .to_string_lossy()
     .to_string()
 }
@@ -1553,10 +1571,10 @@ fn current_time_millis() -> u64 {
 #[cfg(test)]
 mod tests {
   use super::{
-    append_message, append_prompt_entry, build_context, compact_session, compact_session_with_summary,
-    fork_session, load_session, save_session, should_compact, ContextBlock, ContextCompaction,
-    ContextCostEstimate, ContextError, ContextFork, ContextMessage, ContextModuleConfig,
-    ContextRetentionMode, ContextRole, ContextSession, ContextSummarySource, ContextTokenUsage,
+    append_message, append_prompt_entry, build_context, compact_context, compact_context_with_summary,
+    clone_context, load_context, save_context, should_compact, ContextBlock, ContextCompaction,
+    ContextCostEstimate, ContextError, ContextLineage, ContextMessage, ContextModuleConfig,
+    ContextRetentionMode, ContextRole, YuanlingContext, ContextSummarySource, ContextTokenUsage,
   };
   use serde_json::json;
   use std::fs;
@@ -1589,43 +1607,43 @@ mod tests {
   }
 
   #[test]
-  fn load_session_creates_empty_session_when_file_is_missing() {
+  fn load_context_creates_empty_context_when_file_is_missing() {
     let config = test_config();
-    let session = load_session("session-a", &config).expect("session should load");
+    let context = load_context("context-a", &config).expect("context should load");
 
-    assert_eq!(session.session_id, "session-a");
-    assert!(session.messages.is_empty());
-    assert!(session.compaction.is_none());
+    assert_eq!(context.yuanling_id, "context-a");
+    assert!(context.messages.is_empty());
+    assert!(context.compaction.is_none());
   }
 
   #[test]
-  fn load_session_restores_jsonl_records() {
+  fn load_context_restores_jsonl_records() {
     let config = test_config();
-    let mut session = ContextSession::new("session-b");
-    session.model = Some("test-model".to_string());
-    session.messages.push(ContextMessage::user_text("hello"));
-    session.compaction = Some(ContextCompaction {
+    let mut context = YuanlingContext::new("context-b");
+    context.model = Some("test-model".to_string());
+    context.messages.push(ContextMessage::user_text("hello"));
+    context.compaction = Some(ContextCompaction {
       count: 1,
       removed_message_count: 2,
       summary: "summary".to_string(),
       summary_source: ContextSummarySource::Deterministic,
       compacted_at_ms: 1,
     });
-    session.fork = Some(ContextFork {
-      parent_session_id: "parent".to_string(),
+    context.lineage = Some(ContextLineage {
+      parent_yuanling_id: "parent".to_string(),
       branch_name: Some("branch".to_string()),
-      forked_at_ms: 1,
+      cloned_at_ms: 1,
     });
 
-    save_session(&session, &config).expect("session should save");
-    let restored = load_session("session-b", &config).expect("session should reload");
+    save_context(&context, &config).expect("context should save");
+    let restored = load_context("context-b", &config).expect("context should reload");
 
-    assert_eq!(restored.session_id, "session-b");
+    assert_eq!(restored.yuanling_id, "context-b");
     assert_eq!(restored.model.as_deref(), Some("test-model"));
     assert_eq!(restored.messages.len(), 1);
     assert_eq!(restored.compaction.expect("compaction").count, 1);
     assert_eq!(
-      restored.fork.expect("fork").parent_session_id,
+      restored.lineage.expect("lineage").parent_yuanling_id,
       "parent".to_string()
     );
   }
@@ -1644,11 +1662,11 @@ mod tests {
         total_tokens: 15,
       }),
     };
-    append_message("session-c", ContextMessage::user_text("hello"), &config)
+    append_message("context-c", ContextMessage::user_text("hello"), &config)
       .expect("first append should work");
-    append_message("session-c", message, &config).expect("second append should work");
-    let restored = load_session("session-c", &config).expect("session should reload");
-    let contents = fs::read_to_string(PathBuf::from(&config.storage_dir).join("session-c.jsonl"))
+    append_message("context-c", message, &config).expect("second append should work");
+    let restored = load_context("context-c", &config).expect("context should reload");
+    let contents = fs::read_to_string(PathBuf::from(&config.storage_dir).join("context-c.jsonl"))
       .expect("jsonl should exist");
 
     assert_eq!(restored.messages.len(), 2);
@@ -1659,11 +1677,11 @@ mod tests {
   #[test]
   fn should_compact_for_token_threshold_and_tail_turns() {
     let config = test_config();
-    let mut small = ContextSession::new("session-d");
+    let mut small = YuanlingContext::new("context-d");
     small.messages = vec![ContextMessage::user_text("short")];
     assert!(!should_compact(&small, &config));
 
-    let mut large = ContextSession::new("session-e");
+    let mut large = YuanlingContext::new("context-e");
     large.messages = vec![
       ContextMessage::user_text("a ".repeat(120)),
       ContextMessage::assistant_text("b ".repeat(120)),
@@ -1673,41 +1691,41 @@ mod tests {
   }
 
   #[test]
-  fn compact_session_creates_summary_and_preserves_recent_messages() {
+  fn compact_context_creates_summary_and_preserves_recent_messages() {
     let config = test_config();
-    let mut session = ContextSession::new("session-f");
-    session.messages = vec![
+    let mut context = YuanlingContext::new("context-f");
+    context.messages = vec![
       ContextMessage::user_text("old user ".repeat(80)),
       ContextMessage::assistant_text("old assistant ".repeat(80)),
       ContextMessage::user_text("recent user"),
       ContextMessage::assistant_text("recent assistant"),
     ];
 
-    let result = compact_session(&session, &config).expect("compact should work");
+    let result = compact_context(&context, &config).expect("compact should work");
 
     assert!(result.compacted);
     assert_eq!(result.removed_message_count, 2);
-    assert_eq!(result.session.messages[0].role, ContextRole::System);
-    assert_eq!(result.session.messages.len(), 3);
+    assert_eq!(result.context.messages[0].role, ContextRole::System);
+    assert_eq!(result.context.messages.len(), 3);
     assert_eq!(
-      result.session.compaction.expect("compaction").removed_message_count,
+      result.context.compaction.expect("compaction").removed_message_count,
       2
     );
   }
 
   #[test]
-  fn compact_session_with_ai_summary_uses_provided_ai_text() {
+  fn compact_context_with_ai_summary_uses_provided_ai_text() {
     let config = test_config();
-    let mut session = ContextSession::new("session-ai");
-    session.messages = vec![
+    let mut context = YuanlingContext::new("context-ai");
+    context.messages = vec![
       ContextMessage::user_text("old user ".repeat(80)),
       ContextMessage::assistant_text("old assistant ".repeat(80)),
       ContextMessage::user_text("recent user"),
       ContextMessage::assistant_text("recent assistant"),
     ];
 
-    let result = compact_session_with_summary(
-      &session,
+    let result = compact_context_with_summary(
+      &context,
       &config,
       Some(("AI semantic compact summary".to_string(), ContextSummarySource::Ai)),
     )
@@ -1715,44 +1733,44 @@ mod tests {
 
     assert_eq!(result.summary_source, ContextSummarySource::Ai);
     assert!(matches!(
-      &result.session.messages[0].blocks[0],
+      &result.context.messages[0].blocks[0],
       ContextBlock::Text { text } if text.contains("AI semantic compact summary")
     ));
   }
 
   #[test]
-  fn compact_session_health_failure_returns_error_without_mutating_original() {
+  fn compact_context_health_failure_returns_error_without_mutating_original() {
     let config = test_config();
-    let mut session = ContextSession::new("session-health");
-    session.messages = vec![
+    let mut context = YuanlingContext::new("context-health");
+    context.messages = vec![
       ContextMessage::user_text("old user ".repeat(80)),
       ContextMessage::assistant_text("old assistant ".repeat(80)),
       ContextMessage::user_text("recent user"),
       ContextMessage::assistant_text("recent assistant"),
     ];
-    let original_len = session.messages.len();
+    let original_len = context.messages.len();
 
-    let error = compact_session_with_summary(
-      &session,
+    let error = compact_context_with_summary(
+      &context,
       &config,
       Some(("too long ".repeat(1_000), ContextSummarySource::Ai)),
     )
     .expect_err("health should reject non-reducing compact");
 
     assert!(matches!(error, ContextError::HealthCheckFailed(_)));
-    assert_eq!(session.messages.len(), original_len);
+    assert_eq!(context.messages.len(), original_len);
   }
 
   #[test]
-  fn compact_session_does_not_split_tool_use_and_tool_result() {
+  fn compact_context_does_not_split_tool_use_and_tool_result() {
     let config = ContextModuleConfig {
       compact_threshold_tokens: 1,
       preserve_recent_messages: 1,
       ai_compact_enabled: false,
       ..test_config()
     };
-    let mut session = ContextSession::new("session-g");
-    session.messages = vec![
+    let mut context = YuanlingContext::new("context-g");
+    context.messages = vec![
       ContextMessage::user_text("old ".repeat(2_000)),
       ContextMessage {
         role: ContextRole::Assistant,
@@ -1775,36 +1793,36 @@ mod tests {
       },
     ];
 
-    let result = compact_session(&session, &config).expect("compact should work");
+    let result = compact_context(&context, &config).expect("compact should work");
 
     assert!(result.compacted);
     assert_eq!(result.removed_message_count, 1);
     assert!(matches!(
-      result.session.messages[1].blocks[0],
+      result.context.messages[1].blocks[0],
       ContextBlock::ToolUse { .. }
     ));
     assert!(matches!(
-      result.session.messages[2].blocks[0],
+      result.context.messages[2].blocks[0],
       ContextBlock::ToolResult { .. }
     ));
   }
 
   #[tokio::test]
-  async fn build_context_compacts_and_saves_session_when_needed() {
+  async fn build_context_compacts_and_saves_context_when_needed() {
     let config = test_config();
-    let mut session = ContextSession::new("session-h");
-    session.messages = vec![
+    let mut context = YuanlingContext::new("context-h");
+    context.messages = vec![
       ContextMessage::user_text("old user ".repeat(80)),
       ContextMessage::assistant_text("old assistant ".repeat(80)),
       ContextMessage::user_text("recent user"),
       ContextMessage::assistant_text("recent assistant"),
     ];
-    save_session(&session, &config).expect("session should save");
+    save_context(&context, &config).expect("context should save");
 
-    let result = build_context("session-h", &config)
+    let result = build_context("context-h", &config)
       .await
       .expect("context should build");
-    let restored = load_session("session-h", &config).expect("session should reload");
+    let restored = load_context("context-h", &config).expect("context should reload");
 
     assert!(result.compaction.is_some());
     assert_eq!(result.messages[0].role, ContextRole::System);
@@ -1820,7 +1838,7 @@ mod tests {
       ..test_config()
     };
     append_message(
-      "session-cost",
+      "context-cost",
       ContextMessage {
         role: ContextRole::Assistant,
         blocks: vec![ContextBlock::Text {
@@ -1836,7 +1854,7 @@ mod tests {
     )
     .expect("message should append");
 
-    let result = build_context("session-cost", &config)
+    let result = build_context("context-cost", &config)
       .await
       .expect("context should build");
 
@@ -1858,70 +1876,70 @@ mod tests {
       max_rotated_files: 2,
       ..test_config()
     };
-    let mut session = ContextSession::new("session-rotate");
-    session.messages = vec![ContextMessage::user_text("first")];
-    save_session(&session, &config).expect("first save should work");
-    session.messages.push(ContextMessage::assistant_text("second"));
-    save_session(&session, &config).expect("second save should rotate");
-    session.messages.push(ContextMessage::assistant_text("third"));
-    save_session(&session, &config).expect("third save should rotate");
+    let mut context = YuanlingContext::new("context-rotate");
+    context.messages = vec![ContextMessage::user_text("first")];
+    save_context(&context, &config).expect("first save should work");
+    context.messages.push(ContextMessage::assistant_text("second"));
+    save_context(&context, &config).expect("second save should rotate");
+    context.messages.push(ContextMessage::assistant_text("third"));
+    save_context(&context, &config).expect("third save should rotate");
 
-    let base = PathBuf::from(&config.storage_dir).join("session-rotate.jsonl");
+    let base = PathBuf::from(&config.storage_dir).join("context-rotate.jsonl");
     assert!(base.exists());
-    assert!(PathBuf::from(&config.storage_dir).join("session-rotate.1.jsonl").exists());
-    assert!(PathBuf::from(&config.storage_dir).join("session-rotate.2.jsonl").exists());
-    assert!(!PathBuf::from(&config.storage_dir).join("session-rotate.3.jsonl").exists());
+    assert!(PathBuf::from(&config.storage_dir).join("context-rotate.1.jsonl").exists());
+    assert!(PathBuf::from(&config.storage_dir).join("context-rotate.2.jsonl").exists());
+    assert!(!PathBuf::from(&config.storage_dir).join("context-rotate.3.jsonl").exists());
   }
 
   #[test]
   fn prompt_history_can_append_save_and_load() {
     let config = test_config();
-    append_prompt_entry("session-prompt", "first prompt", &config)
+    append_prompt_entry("context-prompt", "first prompt", &config)
       .expect("prompt should append");
-    append_prompt_entry("session-prompt", "second prompt", &config)
+    append_prompt_entry("context-prompt", "second prompt", &config)
       .expect("prompt should append");
 
-    let restored = load_session("session-prompt", &config).expect("session should reload");
+    let restored = load_context("context-prompt", &config).expect("context should reload");
 
     assert_eq!(restored.prompt_history.len(), 2);
     assert_eq!(restored.prompt_history[1].text, "second prompt");
   }
 
   #[test]
-  fn fork_session_copies_parent_without_mutating_it() {
+  fn clone_context_copies_parent_without_mutating_it() {
     let config = test_config();
-    append_message("parent-session", ContextMessage::user_text("hello"), &config)
+    append_message("parent-context", ContextMessage::user_text("hello"), &config)
       .expect("message should append");
 
-    let forked = fork_session(
-      "parent-session",
-      "child-session",
+    let cloned = clone_context(
+      "parent-context",
+      "child-context",
       Some("branch-a".to_string()),
       &config,
     )
-    .expect("fork should work");
-    let parent = load_session("parent-session", &config).expect("parent should reload");
+    .expect("lineage should work");
+    let parent = load_context("parent-context", &config).expect("parent should reload");
 
-    assert_eq!(forked.messages.len(), 1);
+    assert_eq!(cloned.messages.len(), 1);
     assert_eq!(
-      forked.fork.expect("fork").parent_session_id,
-      "parent-session".to_string()
+      cloned.lineage.expect("lineage").parent_yuanling_id,
+      "parent-context".to_string()
     );
-    assert!(parent.fork.is_none());
+    assert!(parent.lineage.is_none());
   }
 
   #[test]
-  fn ttl_expired_session_is_archived_and_returns_empty_session() {
+  fn ttl_expired_context_is_archived_and_returns_empty_context() {
     let config = ContextModuleConfig {
-      session_ttl_minutes: 1,
+      context_ttl_minutes: 1,
       ..test_config()
     };
-    let mut session = ContextSession::new("session-expire");
-    session.updated_at_ms = 1;
-    session.messages = vec![ContextMessage::user_text("old")];
-    save_session(&session, &config).expect("session should save");
+    let mut context = YuanlingContext::new("context-expire");
+    context.updated_at_ms = 1;
+    context.messages = vec![ContextMessage::user_text("old")];
+    save_context(&context, &config).expect("context should save");
 
-    let loaded = load_session("session-expire", &config).expect("session should load");
+    let loaded = load_context("context-expire", &config).expect("context should load");
     let archived = fs::read_dir(&config.storage_dir)
       .expect("dir should exist")
       .filter_map(Result::ok)
@@ -1941,16 +1959,16 @@ mod tests {
       ai_compact_enabled: false,
       ..test_config()
     };
-    let mut session = ContextSession::new("session-turns");
-    session.messages = vec![
+    let mut context = YuanlingContext::new("context-turns");
+    context.messages = vec![
       ContextMessage::user_text("old user ".repeat(80)),
       ContextMessage::assistant_text("old assistant ".repeat(80)),
       ContextMessage::user_text("recent user"),
       ContextMessage::assistant_text("recent assistant"),
     ];
-    save_session(&session, &config).expect("session should save");
+    save_context(&context, &config).expect("context should save");
 
-    let result = build_context("session-turns", &config)
+    let result = build_context("context-turns", &config)
       .await
       .expect("context should build");
 
@@ -1960,10 +1978,10 @@ mod tests {
   }
 
   #[test]
-  fn storage_path_rejects_path_traversal_session_ids() {
+  fn storage_path_rejects_path_traversal_yuanling_ids() {
     let config = test_config();
-    let error = load_session("../bad", &config).expect_err("invalid session id should fail");
-    assert!(error.to_string().contains("invalid context session id"));
+    let error = load_context("../bad", &config).expect_err("invalid context id should fail");
+    assert!(error.to_string().contains("invalid yuanling context id"));
     assert!(!PathBuf::from(config.storage_dir).exists());
   }
 }

@@ -1,7 +1,7 @@
 # 元灵模块设计草图（第一版）
 
 ## 一句话
-元灵 = 将「AI 调用能力 + 工具 + 技能 + MCP + 记忆 + Agent 循环」组合成可激活智能体。
+元灵 = 将「AI 调用能力 + 内部通信 + 工具 + 技能 + MCP + 记忆 + Agent 循环」组合成可激活智能体。
 
 ## 目标边界（MVP）
 
@@ -9,22 +9,72 @@
 - 能够注册/展示配置项
 - 提供一个统一入口：`/yuanling/status`
 - 预留后续接入真实 `ai` 服务商的路径
-- 明确 `context`（session 上下文）与 `memory`（全局记忆）分工
+- 明确 `context`（yuanling context）与 `memory`（全局记忆）分工
 
 ## 子模块职责（第一版）
 
 - `ai`：模型配置、参数（prompt/top_p/temperature）与供应商抽象
-- `tools`：工具注册与可用集合
+- `tools`：工具注册、发现、白名单过滤、权限元数据和执行器抽象
 - `skills`：技能注册与可用集合
 - `mcp`：MCP 连接器注册与可用状态
-- `context`：会话上下文策略与 session 生命周期管理
+- `contact`：元灵之间的内部通信、接收队列和接收状态
+- `context`：元灵长期上下文策略与 yuanling context 生命周期管理
 - `memory`：全局记忆策略定义（窗口策略 / 全量策略）
 - `agent`：agent loop 的基础执行入口与状态
 
 ## Context 设计边界
 
-- `context` 只管理单个 `session_id` 对应的会话历史、上下文窗口和 compact。
-- session 使用本地 JSONL 文件持久化，不依赖数据库。
+- `context` 只管理单个 `yuanling_id` 对应的长期消息历史、上下文窗口和 compact。
+- yuanling context 使用本地 JSONL 文件持久化，不依赖数据库。
 - compact 优先复用主 AI 模块生成语义摘要；AI 不可用时回退本地 deterministic 摘要。
-- `memory` 不参与当前 session 的上下文裁剪；它后续用于跨 session 的全局记忆。
-- context 同时负责 session prompt history、fork、TTL 归档、JSONL 文件轮转、token usage 汇总和成本估算。
+- `memory` 不参与当前 yuanling context 的上下文裁剪；它后续用于跨 yuanling context 的全局记忆。
+- context 同时负责 yuanling context prompt history、lineage、TTL 归档、JSONL 文件轮转、token usage 汇总和成本估算。
+
+## Contact 设计边界
+
+- `contact` 按 `yuanling_id` 管理元灵内部消息接收器，包含 pending 队列、inflight 队列和接收状态。
+- 状态使用数字枚举：`1=idle`、`2=busy`、`3=disabled`。
+- `send_message` 工具每次只发送一条消息，参数为 `from_yuanling_id`、`to_yuanling_id`、`content`。
+- 目标元灵 busy 时不阻塞调用方，消息进入 pending 队列并立即返回 `queued`。
+- v1 不在 contact 内直接调用 AI 或 agent loop；后续 runtime/agent 在目标 idle 时调用 contact 的取消息入口。
+
+## Tools 设计边界
+
+- `tools` 是工具能力管理层，不直接承担 MCP server 生命周期。
+- MCP/LSP/插件等外部工具后续通过 runtime/plugin 工具定义注册进 `ToolRegistry`。
+- 当前内建执行器已支持 `bash`、文件读写编辑、glob/grep、`WebFetch`、`WebSearch`、`ToolSearch`、`send_message`、`Skill`、MCP 管理/调用工具、`Sleep`、`REPL` 和 `PowerShell`。
+- 每个基于元灵派生的智能体可以通过 allowed tools 控制自身工具集合。
+- 工具权限由 registry 在执行前统一处理，具体工具 handler 不负责自行弹窗或判断风险。
+- 当前通过 `ToolPermissionPrompter` trait 预留用户确认/拒绝入口，后续 agent 或前端实现该 trait 即可接入审批体验。
+- 默认策略是只读工具自动允许，工作区写入和高风险工具必须确认；没有确认器时直接拒绝执行。
+- tools 默认采用 `global` 文件系统作用域，符合太初运行在用户全局环境中的系统特性；文件类工具可以按当前用户权限访问绝对路径和相对路径。
+- 若需要把某个派生智能体限制在固定目录内，可以将 `YUANLING_TOOLS_FILESYSTEM_SCOPE=workspace`，此时文件类工具只允许 workspace root 内相对路径，并拒绝绝对路径和路径穿越。
+- `YUANLING_TOOLS_WORKSPACE_ROOT` 在 `global` 模式下作为相对路径解析根目录，在 `workspace` 模式下作为强约束边界。
+- `WebSearch` 使用 DuckDuckGo HTML 搜索作为当前轻量实现，后续如果需要企业级稳定性，可以替换为正式搜索供应商，但不改变工具入口。
+- `Skill` 是只读工具，会通过 skills 模块加载完整 `SKILL.md`；context 默认只注入 skills 清单，完整技能正文由此工具按需加载。
+- MCP 在 tools 中有两种入口：固定工具 `MCP` / `ListMcpResources` / `ReadMcpResource` / `McpAuth`，以及 `registry_with_mcp_tools()` 动态发现后注册的 runtime tools。
+- MCP 工具默认按 `danger_full_access` 处理，因为外部 MCP server 的真实能力不可由 Yuanling 静态判断；后续如果 MCP annotations 可稳定映射权限，再细化为只读或写入级别。
+
+## MCP 设计边界
+
+- `mcp` 是外部 MCP server 的连接、发现、状态和调用管理层，不直接拥有工具权限策略。
+- 当前 v1 可执行传输只支持 `stdio`，因为它最适合本地全局环境和用户自定义 server；`http`、`sse`、`ws` 先保留配置和 preflight 状态，但不会执行调用。
+- MCP 工具使用限定命名：`mcp__{server}__{tool}`，避免和内置 tools、runtime tools、plugin tools 冲突。
+- `McpServerManager` 负责 server 生命周期：spawn、initialize、tools/list、resources/list、resources/read、tools/call、shutdown。
+- `runtime_tool_definitions()` 可把 MCP 发现到的工具转换成 tools 模块的 `RuntimeToolDefinition`，后续 agent 可以把这些定义注入 AI。
+- `McpToolExecutor` 实现 tools 的 `ToolExecutor` trait，后续可以和带 runtime tools 的 `ToolRegistry` 组合执行 MCP 工具。
+- `/yuanling/status` 只展示 MCP 配置、preflight 和降级状态，不新增 `/yuanling/mcp/*` HTTP 路由。
+- MCP preflight 目前只做轻量检查：stdio command 是否存在，远程传输是否属于当前可执行范围；不会为了 status 做完整握手，避免启动阻塞。
+
+## Skills 设计边界
+
+- `skills` 是本地技能说明管理层，负责发现、加载、筛选、搜索和生成 AI 注入视图。
+- skill 的核心载体是 `SKILL.md`，frontmatter 提供 `name` / `description` / `status`，正文提供可注入模型的 instructions。
+- skills 不执行系统操作；如果需要执行能力，应通过 tools 或后续 agent loop 调度。
+- 默认根目录是 `{BACKEND_DATA_DIR}/yuanling/skills`，额外 root 必须通过 `YUANLING_SKILLS_ROOTS` 显式配置。
+- 为避免跨项目泄漏和注入风险，本模块不做无界祖先目录扫描。
+- 后续 plugin/MCP/agent 生成的动态技能可通过 `RuntimeSkillDefinition` 注册到 `SkillRegistry`。
+- context 构建时会自动注入一个轻量 skills 清单，告诉模型当前有哪些技能可用；完整 `SKILL.md` 不会默认进入上下文。
+- tools 内置只读 `Skill` 工具，后续 agent loop 可在模型选择技能后加载完整技能说明，再把结果追加回元灵长期上下文。
+- 技能状态使用数字语义：`1=active`、`2=disabled`、`3=deleted`。当前 active 才会被发现、搜索、注入和加载；disabled/deleted 会保留数据入口，方便后续实现删除、更新和禁用管理。
+- 自动注入可通过 `YUANLING_SKILLS_AUTO_INJECT_ENABLED=false` 关闭，也可以用 `YUANLING_SKILLS_AUTO_INJECT_MAX_ITEMS` 控制注入数量。
