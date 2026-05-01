@@ -139,6 +139,8 @@ If the project is still in an early stage, that must be stated honestly. Do not 
 
 **The README should only include the latest information and descriptions. It does not need to explain the reasons behind changes or describe what older versions were like.**
 
+README style must is github style, you may need to use the logo and html to beautiful you README.md
+
 ## Required Thinking
 
 Think in terms of the development standards used by large companies—if that is how enterprise teams do it, then that is how we should do it as well. You are not building a toy project; you are building an enterprise-grade commercial application, so you must fully account for the following factors:
