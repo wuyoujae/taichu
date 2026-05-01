@@ -137,6 +137,8 @@ When writing the README, you must not mechanically list headings without substan
 
 If the project is still in an early stage, that must be stated honestly. Do not pretend the project is already mature. The README should truthfully reflect the current state of the project while still maintaining a professional tone and strong structure. Your goal is not merely to “write a README file,” but to produce a high-quality README that genuinely serves as the project’s public face, documentation manual, and developer entry point.
 
+**The README should only include the latest information and descriptions. It does not need to explain the reasons behind changes or describe what older versions were like.**
+
 ## Required Thinking
 
 Think in terms of the development standards used by large companies—if that is how enterprise teams do it, then that is how we should do it as well. You are not building a toy project; you are building an enterprise-grade commercial application, so you must fully account for the following factors:
