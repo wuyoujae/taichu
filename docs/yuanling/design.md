@@ -22,6 +22,15 @@
 - `memory`：全局记忆策略定义（窗口策略 / 全量策略）
 - `agent`：agent loop 的基础执行入口与状态
 
+## Agent 设计边界
+
+- `agent` 是消息驱动运行层，负责把 contact、context、ai、tools、skills、mcp 串成被动循环。
+- 默认身份约定：`000000=用户端点`、`000001=司言/默认入口`、`000002=司衡`；其中 `000000` 不运行 Agent Loop。
+- 蓄洪/泄洪属于 agent：contact 只存 pending/inflight 和状态；agent 在目标 idle 时取消息处理，busy 时让消息留在 pending。
+- AI 调用工具时进入 Agent Loop；工具结果写回 context，再进入下一轮 AI，直到 AI 不再调用工具。
+- `send_message` 在 agent 内被包装：投递到用户 ID 只入用户收件箱；投递到其他元灵会加入 dispatch 队列并触发目标元灵。
+- `YUANLING_AGENT_MAX_TOOL_ITERATIONS=0` 表示默认直到 AI 停止；设置为大于 0 时才做硬性截断。
+
 ## Context 设计边界
 
 - `context` 只管理单个 `yuanling_id` 对应的长期消息历史、上下文窗口和 compact。

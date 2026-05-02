@@ -99,6 +99,29 @@ You must always adhere to this principle: the database is not a speculative arch
 
 ### Test
 
+All test scripts must be kept strictly separate from the business/application code. Test code must not be written in the same files as production code.
+
+All test scripts must be placed under the `/app/test` directory, which is dedicated exclusively to storing test scripts. After each test script has fully passed, it must be removed immediately. Do not keep obsolete or temporary test files behind.
+
+Test script design must cover all boundary conditions and realistic user scenarios. Testing should include both isolated module-level tests and integrated module interaction tests.
+
+Before starting any testing work, the following must be designed and documented:
+
+1. Complete Test Cases
+   - Cover all possible usage scenarios.
+   - Include normal cases, edge cases, invalid inputs, boundary conditions, failure scenarios, and realistic user workflows.
+
+2. Test Checklist
+   - Clearly define what needs to be tested.
+   - Specify which modules, functions, APIs, workflows, and integration points are involved.
+   - Describe how each item should be tested.
+
+3. Test Acceptance Checklist
+   - Define the exact criteria for determining whether the tests have passed.
+   - Use this checklist as the final verification reference before considering the testing complete.
+
+All testing must be systematic, isolated, comprehensive, and verifiable. Production code and test code must remain fully separated at all times.
+
 ### Selection
 
 1. When writing frontend code, regardless of what is being implemented, you must first check whether i18n is configured, and then make sure the corresponding language entries are added properly. Do not overlook i18n configuration.If it does not exist, ignore it. If you are unsure, ask the user first.

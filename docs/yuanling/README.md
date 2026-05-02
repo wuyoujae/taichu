@@ -22,6 +22,7 @@
 
 - `context`：按 yuanling context 管理上下文，关注一次对话窗口、生命周期和历史裁剪。
 - `contact`：按 `yuanling_id` 管理元灵之间的内部消息、接收队列和接收状态。
+- `agent`：消息驱动的元灵运行循环，负责蓄洪/泄洪、AI 调用和工具调用循环。
 - `memory`：全局记忆配置，关注跨元灵和全局持久化策略（当前版本为占位能力）。
 
 ## Tools 模块（工具注册、权限与执行）
@@ -126,6 +127,29 @@ Contact 模块负责元灵之间的内部消息投递和接收状态管理。它
 
 - `YUANLING_CONTACT_ENABLED`：是否启用 contact 模块。
 - `YUANLING_CONTACT_STORAGE_DIR`：contact JSON snapshot 存储目录，默认 `{BACKEND_DATA_DIR}/yuanling/contact`。
+
+## Agent 模块（消息驱动循环）
+
+Agent 模块负责把 contact、context、ai、tools、skills 和 mcp 串成完整运行循环。contact 只负责保存消息和状态；agent 负责在目标元灵空闲时泄洪处理 pending 消息，并在 AI 调用工具时持续循环。
+
+### 核心能力
+
+- 用户默认 ID：`000000`，默认入口元灵：`000001`，司衡默认 ID：`000002`。
+- `receive_user_message(content)` 默认从 `000000` 发送到 `000001`。
+- 目标是用户 ID 时只写入用户 contact，不启动 Agent Loop。
+- 目标是可运行元灵且 idle 时，agent 取 pending 消息进入 busy 并开始处理。
+- AI 返回 tool use 时执行工具，把 tool result 写回 context，再继续下一轮 AI。
+- `send_message` 在 agent 内会触发目标元灵调度，但不会让工具本身递归调用 agent。
+
+### Agent 配置（env）
+
+- `YUANLING_AGENT_ENABLED`：是否启用 agent 模块。
+- `YUANLING_AGENT_DEFAULT_USER_ID`：默认用户端点 ID，默认 `000000`。
+- `YUANLING_AGENT_DEFAULT_ENTRY_ID`：默认入口元灵 ID，默认 `000001`。
+- `YUANLING_AGENT_USER_IDS`：用户端点 ID 列表，默认 `000000`。
+- `YUANLING_AGENT_STREAMING_ENABLED`：Agent 调用 AI 时是否请求流式。
+- `YUANLING_AGENT_MAX_TOOL_ITERATIONS`：工具循环上限，`0` 表示直到 AI 停止。
+- `YUANLING_AGENT_MAX_OUTPUT_TOKENS`：Agent 单次 AI 输出 token 上限。
 
 ## MCP 模块（外部 MCP server 连接与发现）
 
