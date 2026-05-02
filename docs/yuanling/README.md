@@ -110,6 +110,19 @@ impl ToolPermissionPrompter for AllowPrompter {
 - `YUANLING_TOOLS_CONFIRM_WORKSPACE_WRITE`：工作区写入工具是否需要确认。
 - `YUANLING_TOOLS_CONFIRM_DANGER_FULL_ACCESS`：高风险工具是否需要确认。
 
+### Tools 状态管理
+
+Tools 模块现在包含系统级工具状态管理，用来控制某个工具最终可以被哪些元灵使用。它和 `spiritkind` 的成员 tools 配置不是同一层：`spiritkind` 表示某个子智能体被配置了哪些工具，tools 状态管理表示系统是否最终允许它使用这些工具。
+
+工具访问模式使用数字语义：
+
+- `1`：`enabled_all`，所有元灵可用。
+- `2`：`disabled_all`，所有元灵不可用。
+- `3`：`allow_only`，只有指定元灵可用。
+- `4`：`deny_only`，除指定元灵外都可用。
+
+默认没有状态规则时等价于 `enabled_all`，不会改变现有行为。状态文件默认保存到 `{BACKEND_DATA_DIR}/yuanling/tools/tool_state.json`，可通过 `YUANLING_TOOLS_STATE_DIR` 覆盖目录。Agent Loop 会先读取 spiritkind 的工具白名单，再叠加 tools 状态规则，只把最终可用的工具注入给 AI。
+
 ## Contact 模块（元灵内部通信与接收状态）
 
 Contact 模块负责元灵之间的内部消息投递和接收状态管理。它按 `yuanling_id` 维护一个本地接收器，包含 pending 队列、inflight 队列和当前接收状态。它不等同于 context：contact 管“消息有没有送到、目标能不能接收”，context 管“元灵长期上下文如何被模型使用”。

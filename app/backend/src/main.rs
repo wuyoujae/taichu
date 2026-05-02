@@ -3,6 +3,7 @@ use serde_json::json;
 use std::{env, path::PathBuf};
 
 mod yuanling;
+mod spiritkind;
 
 async fn health() -> Json<serde_json::Value> {
   Json(json!({

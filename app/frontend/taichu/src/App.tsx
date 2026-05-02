@@ -1,4 +1,12 @@
+import { OlympusWorkspace } from "./pages/OlympusWorkspace";
+
+const route = window.location.pathname.toLowerCase();
+
 export function App() {
+  if (route === "/index" || route === "/index/" || route === "/" || route === "/index.html") {
+    return <OlympusWorkspace />;
+  }
+
   return (
     <main style={{ padding: 40, fontFamily: "system-ui, sans-serif" }}>
       <h1>Taichu 本地桌面应用</h1>
@@ -11,4 +19,3 @@ export function App() {
     </main>
   );
 }
-

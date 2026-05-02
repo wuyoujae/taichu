@@ -64,6 +64,19 @@
 - MCP 在 tools 中有两种入口：固定工具 `MCP` / `ListMcpResources` / `ReadMcpResource` / `McpAuth`，以及 `registry_with_mcp_tools()` 动态发现后注册的 runtime tools。
 - MCP 工具默认按 `danger_full_access` 处理，因为外部 MCP server 的真实能力不可由 Yuanling 静态判断；后续如果 MCP annotations 可稳定映射权限，再细化为只读或写入级别。
 
+### Tools 状态管理
+
+Tools 模块现在包含系统级工具状态管理，用来控制某个工具最终可以被哪些元灵使用。它和 `spiritkind` 的成员 tools 配置不是同一层：`spiritkind` 表示某个子智能体被配置了哪些工具，tools 状态管理表示系统是否最终允许它使用这些工具。
+
+工具访问模式使用数字语义：
+
+- `1`：`enabled_all`，所有元灵可用。
+- `2`：`disabled_all`，所有元灵不可用。
+- `3`：`allow_only`，只有指定元灵可用。
+- `4`：`deny_only`，除指定元灵外都可用。
+
+默认没有状态规则时等价于 `enabled_all`，不会改变现有行为。状态文件默认保存到 `{BACKEND_DATA_DIR}/yuanling/tools/tool_state.json`，可通过 `YUANLING_TOOLS_STATE_DIR` 覆盖目录。Agent Loop 会先读取 spiritkind 的工具白名单，再叠加 tools 状态规则，只把最终可用的工具注入给 AI。
+
 ## MCP 设计边界
 
 - `mcp` 是外部 MCP server 的连接、发现、状态和调用管理层，不直接拥有工具权限策略。

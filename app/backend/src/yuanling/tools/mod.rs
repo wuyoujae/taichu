@@ -11,7 +11,7 @@ use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const DEFAULT_MAX_SEARCH_RESULTS: usize = 10;
 const DEFAULT_COMMAND_TIMEOUT_MS: u64 = 30_000;
@@ -19,6 +19,8 @@ const DEFAULT_WEB_TIMEOUT_MS: u64 = 20_000;
 const MAX_COMMAND_OUTPUT_BYTES: usize = 256 * 1024;
 const DEFAULT_GREP_LIMIT: usize = 100;
 const DEFAULT_GLOB_LIMIT: usize = 500;
+const TOOL_STATE_VERSION: u32 = 1;
+const TOOL_STATE_FILE_NAME: &str = "tool_state.json";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -79,6 +81,65 @@ impl ToolFilesystemScope {
       _ => Self::Global,
     }
   }
+}
+
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[repr(u8)]
+#[serde(try_from = "u8", into = "u8")]
+pub enum ToolAccessMode {
+  EnabledAll = 1,
+  DisabledAll = 2,
+  AllowOnly = 3,
+  DenyOnly = 4,
+}
+
+impl From<ToolAccessMode> for u8 {
+  fn from(value: ToolAccessMode) -> Self {
+    value as u8
+  }
+}
+
+impl TryFrom<u8> for ToolAccessMode {
+  type Error = String;
+
+  fn try_from(value: u8) -> Result<Self, Self::Error> {
+    match value {
+      1 => Ok(Self::EnabledAll),
+      2 => Ok(Self::DisabledAll),
+      3 => Ok(Self::AllowOnly),
+      4 => Ok(Self::DenyOnly),
+      _ => Err(format!("invalid tool access mode: {value}")),
+    }
+  }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolAccessRule {
+  pub tool_name: String,
+  pub mode: ToolAccessMode,
+  #[serde(default)]
+  pub allow_yuanling_ids: Vec<String>,
+  #[serde(default)]
+  pub deny_yuanling_ids: Vec<String>,
+  pub updated_at_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolStateRegistry {
+  pub version: u32,
+  pub rules: Vec<ToolAccessRule>,
+  pub updated_at_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolAccessDecision {
+  pub tool_name: String,
+  pub yuanling_id: String,
+  pub allowed: bool,
+  pub mode: ToolAccessMode,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -254,6 +315,7 @@ pub enum ToolError {
   ModuleDisabled,
   Disabled(String),
   NotAllowed(String),
+  AccessDenied(String),
   UnknownTool(String),
   DuplicateTool(String),
   MissingHandler(String),
@@ -269,6 +331,7 @@ impl Display for ToolError {
       Self::ModuleDisabled => write!(formatter, "tools module is disabled"),
       Self::Disabled(name) => write!(formatter, "tool `{name}` is disabled"),
       Self::NotAllowed(name) => write!(formatter, "tool `{name}` is not allowed"),
+      Self::AccessDenied(message) => write!(formatter, "{message}"),
       Self::UnknownTool(name) => write!(formatter, "unknown tool `{name}`"),
       Self::DuplicateTool(name) => write!(formatter, "duplicate tool `{name}`"),
       Self::MissingHandler(name) => write!(formatter, "tool `{name}` has no registered handler"),
@@ -1107,6 +1170,103 @@ impl ToolRegistry {
     executor.execute(&canonical, input)
   }
 
+
+  pub fn execute_for_yuanling<E: ToolExecutor>(
+    &self,
+    yuanling_id: &str,
+    name: &str,
+    input: &Value,
+    config: &ToolsModuleConfig,
+    spiritkind_tools: Option<&BTreeSet<String>>,
+    executor: &mut E,
+    mut prompter: Option<&mut dyn ToolPermissionPrompter>,
+  ) -> Result<ToolExecutionOutput, ToolError> {
+    if !config.enabled {
+      return Err(ToolError::ModuleDisabled);
+    }
+
+    let canonical = self.canonical_tool_name(name)?;
+    let spec = self
+      .find_spec(&canonical)
+      .ok_or_else(|| ToolError::UnknownTool(name.to_string()))?;
+
+    let access = self.access_decision_for_yuanling(&canonical, yuanling_id, config)?;
+    if !access.allowed {
+      return Err(ToolError::AccessDenied(access.reason.unwrap_or_else(|| {
+        format!("tool `{canonical}` is not available for yuanling `{yuanling_id}`")
+      })));
+    }
+
+    if config
+      .allowed_tools
+      .as_ref()
+      .is_some_and(|allowed| !allowed.contains(&canonical))
+    {
+      return Err(ToolError::NotAllowed(canonical));
+    }
+
+    if spiritkind_tools.is_some_and(|allowed| !allowed.contains(&canonical)) {
+      return Err(ToolError::NotAllowed(canonical));
+    }
+
+    if !spec.enabled {
+      return Err(ToolError::Disabled(canonical));
+    }
+
+    let permission_outcome = if !config
+      .permission_policy
+      .requires_confirmation(spec.required_permission)
+    {
+      ToolPermissionOutcome::AutoAllowed
+    } else {
+      let request = ToolPermissionRequest {
+        tool_name: spec.name.clone(),
+        input: input.clone(),
+        required_permission: spec.required_permission.code(),
+        permission_label: spec.required_permission.label().to_string(),
+        source: spec.source,
+        description: spec.description.clone(),
+        risk: spec.required_permission.risk().to_string(),
+      };
+
+      let Some(prompter) = prompter.as_mut() else {
+        return Err(ToolError::PermissionRequired(spec.name.clone()));
+      };
+
+      match prompter.confirm(&request) {
+        ToolPermissionDecision::Allow => ToolPermissionOutcome::UserAllowed,
+        ToolPermissionDecision::Deny { reason } => {
+          let suffix = reason
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| format!(": {value}"))
+            .unwrap_or_default();
+          return Err(ToolError::PermissionDenied(format!(
+            "tool `{}` permission denied{}",
+            spec.name, suffix
+          )));
+        }
+      }
+    };
+
+    if canonical == "ToolSearch" {
+      let query = input.get("query").and_then(Value::as_str).unwrap_or("");
+      let max_results = input
+        .get("max_results")
+        .and_then(Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .unwrap_or(config.max_search_results);
+      return Ok(ToolExecutionOutput {
+        tool_name: canonical,
+        output: json!(self.search(query, max_results)),
+        permission_outcome: Some(permission_outcome),
+      });
+    }
+
+    let mut output = executor.execute(&canonical, input)?;
+    output.permission_outcome = Some(permission_outcome);
+    Ok(output)
+  }
+
   pub fn execute_with_permissions<E: ToolExecutor>(
     &self,
     name: &str,
@@ -1210,6 +1370,17 @@ impl ToolRegistry {
       .ok_or_else(|| ToolError::UnknownTool(name.to_string()))
   }
 
+
+  fn access_decision_for_yuanling(
+    &self,
+    tool_name: &str,
+    yuanling_id: &str,
+    config: &ToolsModuleConfig,
+  ) -> Result<ToolAccessDecision, ToolError> {
+    let state = load_tool_state(config)?;
+    Ok(tool_access_decision_from_state(tool_name, yuanling_id, &state))
+  }
+
   fn find_spec(&self, name: &str) -> Option<&ToolSpec> {
     self
       .builtin_tools
@@ -1237,6 +1408,7 @@ pub struct ToolsModuleConfig {
   pub permission_policy: ToolPermissionPolicy,
   pub filesystem_scope: ToolFilesystemScope,
   pub workspace_root: Option<String>,
+  pub state_dir: String,
 }
 
 impl ToolsModuleConfig {
@@ -1248,6 +1420,9 @@ impl ToolsModuleConfig {
       permission_policy: self.permission_policy.clone(),
       filesystem_scope: self.filesystem_scope,
       workspace_root: self.workspace_root.clone(),
+      state_dir: self.state_dir.clone(),
+      state_rule_count: load_tool_state(self).map(|state| state.rules.len()).unwrap_or_default(),
+      disabled_all_count: load_tool_state(self).map(|state| state.rules.iter().filter(|rule| rule.mode == ToolAccessMode::DisabledAll).count()).unwrap_or_default(),
       registered_count: registry.all_specs().len(),
       exposed_count: registry.definitions(self.allowed_tools.as_ref()).len(),
       tools: registry.views(self.allowed_tools.as_ref()),
@@ -1263,6 +1438,9 @@ pub struct ToolsModuleConfigView {
   pub permission_policy: ToolPermissionPolicy,
   pub filesystem_scope: ToolFilesystemScope,
   pub workspace_root: Option<String>,
+  pub state_dir: String,
+  pub state_rule_count: usize,
+  pub disabled_all_count: usize,
   pub registered_count: usize,
   pub exposed_count: usize,
   pub tools: Vec<ToolDefinitionView>,
@@ -1283,6 +1461,7 @@ pub fn resolve_from_env() -> ToolsModuleConfig {
       "YUANLING_TOOLS_FILESYSTEM_SCOPE",
     )),
     workspace_root: env_or_optional("YUANLING_TOOLS_WORKSPACE_ROOT"),
+    state_dir: env_or_optional("YUANLING_TOOLS_STATE_DIR").unwrap_or_else(default_tool_state_dir),
     permission_policy: ToolPermissionPolicy {
       auto_allow_read: env_or_bool("YUANLING_TOOLS_AUTO_ALLOW_READ", true),
       confirm_workspace_write: env_or_bool("YUANLING_TOOLS_CONFIRM_WORKSPACE_WRITE", true),
@@ -1296,6 +1475,97 @@ pub fn resolve_from_env() -> ToolsModuleConfig {
 
 pub fn default_tools() -> Vec<ToolDefinitionView> {
   ToolRegistry::builtin().views(None)
+}
+
+
+pub fn load_tool_state(config: &ToolsModuleConfig) -> Result<ToolStateRegistry, ToolError> {
+  if !config.enabled {
+    return Err(ToolError::ModuleDisabled);
+  }
+  let path = tool_state_path(config);
+  if !path.exists() {
+    return Ok(empty_tool_state());
+  }
+  let contents = fs::read_to_string(path).map_err(|error| ToolError::ExecutionFailed(error.to_string()))?;
+  serde_json::from_str(&contents).map_err(|error| ToolError::InvalidInput(error.to_string()))
+}
+
+pub fn save_tool_state(
+  state: &ToolStateRegistry,
+  config: &ToolsModuleConfig,
+) -> Result<(), ToolError> {
+  if !config.enabled {
+    return Err(ToolError::ModuleDisabled);
+  }
+  fs::create_dir_all(&config.state_dir).map_err(|error| ToolError::ExecutionFailed(error.to_string()))?;
+  let body = serde_json::to_string_pretty(state)
+    .map_err(|error| ToolError::InvalidInput(error.to_string()))?;
+  fs::write(tool_state_path(config), body).map_err(|error| ToolError::ExecutionFailed(error.to_string()))
+}
+
+pub fn set_tool_access_rule(
+  tool_name: &str,
+  mut rule: ToolAccessRule,
+  config: &ToolsModuleConfig,
+) -> Result<ToolAccessRule, ToolError> {
+  let mut state = load_tool_state(config)?;
+  let canonical = canonical_state_tool_name(tool_name);
+  let now = now_ms();
+  rule.tool_name = canonical.clone();
+  rule.allow_yuanling_ids = normalize_id_list(rule.allow_yuanling_ids);
+  rule.deny_yuanling_ids = normalize_id_list(rule.deny_yuanling_ids);
+  rule.updated_at_ms = now;
+
+  if let Some(existing) = state.rules.iter_mut().find(|item| item.tool_name == canonical) {
+    *existing = rule.clone();
+  } else {
+    state.rules.push(rule.clone());
+  }
+  state.updated_at_ms = now;
+  save_tool_state(&state, config)?;
+  Ok(rule)
+}
+
+pub fn clear_tool_access_rule(
+  tool_name: &str,
+  config: &ToolsModuleConfig,
+) -> Result<(), ToolError> {
+  let mut state = load_tool_state(config)?;
+  let canonical = canonical_state_tool_name(tool_name);
+  state.rules.retain(|rule| rule.tool_name != canonical);
+  state.updated_at_ms = now_ms();
+  save_tool_state(&state, config)
+}
+
+pub fn tool_access_for_yuanling(
+  tool_name: &str,
+  yuanling_id: &str,
+  config: &ToolsModuleConfig,
+) -> Result<ToolAccessDecision, ToolError> {
+  let state = load_tool_state(config)?;
+  let canonical = canonical_state_tool_name(tool_name);
+  Ok(tool_access_decision_from_state(&canonical, yuanling_id, &state))
+}
+
+pub fn definitions_for_yuanling(
+  registry: &ToolRegistry,
+  yuanling_id: &str,
+  config: &ToolsModuleConfig,
+  spiritkind_tools: Option<&BTreeSet<String>>,
+) -> Result<Vec<ToolDefinition>, ToolError> {
+  if !config.enabled {
+    return Err(ToolError::ModuleDisabled);
+  }
+  let state = load_tool_state(config)?;
+  Ok(registry
+    .all_specs()
+    .into_iter()
+    .filter(|spec| spec.enabled)
+    .filter(|spec| config.allowed_tools.as_ref().is_none_or(|allowed| allowed.contains(&spec.name)))
+    .filter(|spec| spiritkind_tools.is_none_or(|allowed| allowed.contains(&spec.name)))
+    .filter(|spec| tool_access_decision_from_state(&spec.name, yuanling_id, &state).allowed)
+    .map(|spec| spec.definition())
+    .collect())
 }
 
 pub async fn registry_with_mcp_tools(
@@ -2087,6 +2357,112 @@ fn alias_map() -> BTreeMap<&'static str, String> {
   .into_iter()
   .map(|(alias, canonical)| (alias, canonical.to_string()))
   .collect()
+}
+
+
+
+fn empty_tool_state() -> ToolStateRegistry {
+  ToolStateRegistry {
+    version: TOOL_STATE_VERSION,
+    rules: Vec::new(),
+    updated_at_ms: now_ms(),
+  }
+}
+
+fn tool_state_path(config: &ToolsModuleConfig) -> PathBuf {
+  Path::new(&config.state_dir).join(TOOL_STATE_FILE_NAME)
+}
+
+fn default_tool_state_dir() -> String {
+  PathBuf::from(env::var("BACKEND_DATA_DIR").unwrap_or_else(|_| "./data".to_string()))
+    .join("yuanling")
+    .join("tools")
+    .display()
+    .to_string()
+}
+
+fn canonical_state_tool_name(tool_name: &str) -> String {
+  ToolRegistry::builtin()
+    .canonical_tool_name(tool_name)
+    .unwrap_or_else(|_| tool_name.trim().to_string())
+}
+
+fn tool_access_decision_from_state(
+  tool_name: &str,
+  yuanling_id: &str,
+  state: &ToolStateRegistry,
+) -> ToolAccessDecision {
+  let Some(rule) = state.rules.iter().find(|rule| rule.tool_name == tool_name) else {
+    return ToolAccessDecision {
+      tool_name: tool_name.to_string(),
+      yuanling_id: yuanling_id.to_string(),
+      allowed: true,
+      mode: ToolAccessMode::EnabledAll,
+      reason: None,
+    };
+  };
+
+  if rule.deny_yuanling_ids.iter().any(|id| id == yuanling_id) {
+    return ToolAccessDecision {
+      tool_name: tool_name.to_string(),
+      yuanling_id: yuanling_id.to_string(),
+      allowed: false,
+      mode: rule.mode,
+      reason: Some(format!("tool `{tool_name}` is denied for yuanling `{yuanling_id}`")),
+    };
+  }
+
+  match rule.mode {
+    ToolAccessMode::EnabledAll => ToolAccessDecision {
+      tool_name: tool_name.to_string(),
+      yuanling_id: yuanling_id.to_string(),
+      allowed: true,
+      mode: rule.mode,
+      reason: None,
+    },
+    ToolAccessMode::DisabledAll => ToolAccessDecision {
+      tool_name: tool_name.to_string(),
+      yuanling_id: yuanling_id.to_string(),
+      allowed: false,
+      mode: rule.mode,
+      reason: Some(format!("tool `{tool_name}` is disabled for all yuanlings")),
+    },
+    ToolAccessMode::AllowOnly => {
+      let allowed = rule.allow_yuanling_ids.iter().any(|id| id == yuanling_id);
+      ToolAccessDecision {
+        tool_name: tool_name.to_string(),
+        yuanling_id: yuanling_id.to_string(),
+        allowed,
+        mode: rule.mode,
+        reason: (!allowed).then(|| format!("tool `{tool_name}` is only allowed for selected yuanlings")),
+      }
+    }
+    ToolAccessMode::DenyOnly => ToolAccessDecision {
+      tool_name: tool_name.to_string(),
+      yuanling_id: yuanling_id.to_string(),
+      allowed: true,
+      mode: rule.mode,
+      reason: None,
+    },
+  }
+}
+
+fn normalize_id_list(values: Vec<String>) -> Vec<String> {
+  let mut normalized = Vec::new();
+  for value in values {
+    let value = value.trim().to_string();
+    if !value.is_empty() && !normalized.contains(&value) {
+      normalized.push(value);
+    }
+  }
+  normalized
+}
+
+fn now_ms() -> u64 {
+  SystemTime::now()
+    .duration_since(UNIX_EPOCH)
+    .map(|duration| duration.as_millis() as u64)
+    .unwrap_or_default()
 }
 
 fn env_or_optional(key: &str) -> Option<String> {

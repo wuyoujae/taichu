@@ -1,4 +1,5 @@
 use super::{ai, contact, context, mcp, tools};
+use crate::spiritkind;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -370,7 +371,14 @@ async fn run_ai_tool_loop<C: AgentAiClient + ?Sized>(
       .map_err(|error| AgentError::Context(error.to_string()))?;
     let (system, messages) = context_messages_to_ai_messages(built.messages);
     let registry = build_tool_registry(options.mcp_tools_enabled).await;
-    let tools = registry.definitions(options.tools_config.allowed_tools.as_ref());
+    let spiritkind_allowed_tools = spiritkind_tools_for_yuanling(yuanling_id, &registry);
+    let tools = tools::definitions_for_yuanling(
+      &registry,
+      yuanling_id,
+      &options.tools_config,
+      spiritkind_allowed_tools.as_ref(),
+    )
+    .unwrap_or_default();
     let request = ai::ChatComposeRequest {
       model: None,
       max_tokens: Some(options.agent_config.max_output_tokens),
@@ -439,18 +447,22 @@ async fn run_ai_tool_loop<C: AgentAiClient + ?Sized>(
         },
       );
       let execution = if let Some(prompter) = prompter.as_mut() {
-        registry.execute_with_permissions(
+        registry.execute_for_yuanling(
+          yuanling_id,
           &tool_use.name,
           &tool_use.input,
           &options.tools_config,
+          spiritkind_allowed_tools.as_ref(),
           &mut executor,
           Some(&mut **prompter),
         )
       } else {
-        registry.execute_with_permissions(
+        registry.execute_for_yuanling(
+          yuanling_id,
           &tool_use.name,
           &tool_use.input,
           &options.tools_config,
+          spiritkind_allowed_tools.as_ref(),
           &mut executor,
           None,
         )
@@ -496,6 +508,18 @@ async fn run_ai_tool_loop<C: AgentAiClient + ?Sized>(
   }
 
   Ok(outcome)
+}
+
+fn spiritkind_tools_for_yuanling(
+  yuanling_id: &str,
+  registry: &tools::ToolRegistry,
+) -> Option<BTreeSet<String>> {
+  let config = spiritkind::resolve_from_env();
+  let values = spiritkind::tools_for(yuanling_id, &config).ok()?;
+  if values.is_empty() {
+    return None;
+  }
+  registry.normalize_allowed_tools(&values).ok().flatten()
 }
 
 async fn build_tool_registry(mcp_tools_enabled: bool) -> tools::ToolRegistry {
