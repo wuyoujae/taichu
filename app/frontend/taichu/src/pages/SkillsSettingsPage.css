@@ -86,6 +86,34 @@
 .skills-prototype .detail-lines { display: flex; flex-direction: column; gap: .75rem; }
 .skills-prototype .detail-lines p { display: grid; grid-template-columns: 64px 1fr; gap: .75rem; margin: 0; font-size: .8rem; color: var(--muted-foreground); }
 .skills-prototype .detail-lines span { color: var(--foreground); overflow-wrap: anywhere; }
+.skills-prototype .section-desc { font-size: .875rem; color: var(--muted-foreground); line-height: 1.5; margin: 0 0 1rem; }
+.skills-prototype .input-field,
+.skills-prototype .textarea-field {
+  width: 100%;
+  padding: .5rem .75rem;
+  font-size: .875rem;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--foreground);
+  outline: none;
+  transition: border-color .2s, box-shadow .2s;
+}
+.skills-prototype .input-field:focus,
+.skills-prototype .textarea-field:focus {
+  border-color: #a1a1aa;
+  box-shadow: 0 0 0 1px #a1a1aa;
+}
+.skills-prototype .textarea-field {
+  min-height: 180px;
+  resize: vertical;
+  line-height: 1.55;
+}
+.skills-prototype .create-fields {
+  display: flex;
+  flex-direction: column;
+  gap: .75rem;
+}
 .skills-prototype .prompt-preview { display: block; white-space: pre-wrap; overflow: auto; max-height: 200px; background: var(--page-bg); border: 1px solid var(--border); border-radius: var(--radius-md); padding: .75rem; font-size: .75rem; color: var(--muted-foreground); line-height: 1.55; }
 .skills-prototype .sheet-footer { padding: 1.5rem; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: .75rem; background: var(--background); }
 .skills-prototype .empty-row { min-height: 160px; display: flex; align-items: center; justify-content: center; gap: .5rem; color: var(--muted-foreground); background: var(--background); border: 1px solid var(--border); border-radius: var(--radius-lg); }

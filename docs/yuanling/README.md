@@ -230,6 +230,8 @@ stdio server 示例：
 - `PUT /yuanling/mcp/servers/{name}`：更新指定 MCP server 配置。
 - `DELETE /yuanling/mcp/servers/{name}`：从本地 MCP 配置文件移除 server；env 定义的 server 不会被物理修改。
 - `POST /yuanling/mcp/discover`：执行 best-effort 工具发现，返回已发现工具、失败 server 和 unsupported server。
+- `GET /yuanling/mcp/servers/{name}/resources`：列出指定 MCP server 的 resources。
+- `POST /yuanling/mcp/servers/{name}/resources/read`：读取指定 MCP resource 的内容。
 
 本地页面配置保存到 `{BACKEND_DATA_DIR}/yuanling/mcp/servers.json`，同时继续兼容 `YUANLING_MCP_SERVERS_JSON`。如果同名配置同时存在，env 配置具有更高优先级。
 
@@ -285,6 +287,8 @@ Use this skill when the task requires polished writing.
 - `GET /yuanling/skills/search?q=keyword`：按名称、描述和来源搜索 skill。
 - `GET /yuanling/skills/{id}`：加载 active skill 的完整 `SKILL.md` instructions。
 - `POST /yuanling/skills/install`：从本地 `SKILL.md` 文件或包含 `SKILL.md` 的目录安装 skill。
+- `POST /yuanling/skills/create`：通过页面表单创建新的 `SKILL.md`。
+- `PUT /yuanling/skills/{id}`：更新现有 skill 的名称、描述和 instructions。
 - `PUT /yuanling/skills/{id}/status`：更新 skill 状态，`1=active`、`2=disabled`、`3=deleted`。
 
 当前删除采用状态删除，不物理移除 `SKILL.md` 文件，避免误删用户本地技能资产。

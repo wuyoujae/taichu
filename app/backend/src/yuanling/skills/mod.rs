@@ -513,6 +513,112 @@ pub fn install_skill(source: &Path, config: &SkillsModuleConfig) -> Result<Insta
   })
 }
 
+fn create_skill_file(
+  request: SkillCreateRequest,
+  config: &SkillsModuleConfig,
+) -> Result<InstalledSkill, SkillError> {
+  if !config.enabled {
+    return Err(SkillError::Disabled);
+  }
+  let name = request.name.trim();
+  if name.is_empty() {
+    return Err(SkillError::InvalidInput("skill name is required".to_string()));
+  }
+  let prompt = request.prompt.trim();
+  if prompt.is_empty() {
+    return Err(SkillError::InvalidInput("skill prompt is required".to_string()));
+  }
+  let id = normalize_skill_id(name);
+  let target_root = config
+    .roots
+    .iter()
+    .find(|root| root.source == SkillSource::DataDir && root.origin == SkillOrigin::SkillsDir)
+    .map(|root| root.path.clone())
+    .unwrap_or_else(default_data_skill_root);
+  let installed_dir = target_root.join(&id);
+  let installed_path = installed_dir.join("SKILL.md");
+  if installed_path.exists() {
+    return Err(SkillError::DuplicateSkill(id));
+  }
+  fs::create_dir_all(&installed_dir).map_err(io_to_skill_error)?;
+  let description = request.description.unwrap_or_default();
+  let contents = format!(
+    "---\nname: {}\ndescription: {}\nstatus: active\n---\n\n{}",
+    name, description, prompt
+  );
+  fs::write(&installed_path, contents.as_bytes()).map_err(io_to_skill_error)?;
+  Ok(InstalledSkill {
+    id: id.clone(),
+    name: name.to_string(),
+    source_path: installed_path.clone(),
+    installed_path,
+  })
+}
+
+fn update_skill_file(
+  skill_id: &str,
+  request: SkillUpdateRequest,
+  config: &SkillsModuleConfig,
+) -> Result<SkillDescriptor, SkillError> {
+  if !config.enabled {
+    return Err(SkillError::Disabled);
+  }
+  let requested = normalize_skill_id(skill_id);
+  let registry = SkillRegistry::discover(config)?;
+  let descriptor = registry
+    .all_descriptors(None)?
+    .into_iter()
+    .find(|skill| skill.id == requested)
+    .ok_or_else(|| SkillError::UnknownSkill(skill_id.to_string()))?;
+  if descriptor.source == SkillSource::Runtime || descriptor.path.as_os_str().is_empty() {
+    return Err(SkillError::InvalidInput(
+      "runtime skills cannot be edited through file update".to_string(),
+    ));
+  }
+
+  let contents = fs::read_to_string(&descriptor.path).map_err(io_to_skill_error)?;
+  let metadata = parse_skill_frontmatter(&contents);
+  let name = request
+    .name
+    .as_deref()
+    .map(str::trim)
+    .filter(|value| !value.is_empty())
+    .unwrap_or(&descriptor.name);
+  let description = request
+    .description
+    .or(descriptor.description.clone())
+    .unwrap_or_default();
+  let status = SkillStatus::from_frontmatter(metadata.status);
+  let prompt = request
+    .prompt
+    .as_deref()
+    .map(str::trim)
+    .filter(|value| !value.is_empty())
+    .map(str::to_string)
+    .unwrap_or_else(|| strip_frontmatter(&contents));
+  let updated = format!(
+    "---\nname: {}\ndescription: {}\nstatus: {}\n---\n\n{}",
+    name,
+    description,
+    status.label(),
+    prompt
+  );
+  fs::write(&descriptor.path, updated.as_bytes()).map_err(io_to_skill_error)?;
+
+  let refreshed = SkillRegistry::discover(config)?;
+  refreshed
+    .all_descriptors(None)?
+    .into_iter()
+    .find(|skill| skill.id == normalize_skill_id(name))
+    .or_else(|| {
+      refreshed
+        .all_descriptors(None)
+        .ok()
+        .and_then(|skills| skills.into_iter().find(|skill| skill.path == descriptor.path))
+    })
+    .ok_or_else(|| SkillError::UnknownSkill(skill_id.to_string()))
+}
+
 pub fn set_skill_status(
   skill_id: &str,
   status: SkillStatus,
@@ -583,6 +689,20 @@ struct SkillInstallRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct SkillCreateRequest {
+  name: String,
+  description: Option<String>,
+  prompt: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SkillUpdateRequest {
+  name: Option<String>,
+  description: Option<String>,
+  prompt: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct SkillStatusRequest {
   status: u8,
 }
@@ -643,9 +763,28 @@ async fn load(AxumPath(id): AxumPath<String>) -> Json<ApiResponse<SkillLoadResul
   })
 }
 
+async fn update(
+  AxumPath(id): AxumPath<String>,
+  Json(request): Json<SkillUpdateRequest>,
+) -> Json<ApiResponse<SkillDescriptor>> {
+  let config = resolve_from_env();
+  Json(match update_skill_file(&id, request, &config) {
+    Ok(skill) => ApiResponse::ok(skill),
+    Err(error) => ApiResponse::error(error.to_string()),
+  })
+}
+
 async fn install(Json(request): Json<SkillInstallRequest>) -> Json<ApiResponse<InstalledSkill>> {
   let config = resolve_from_env();
   Json(match install_skill(Path::new(&request.source_path), &config) {
+    Ok(skill) => ApiResponse::ok(skill),
+    Err(error) => ApiResponse::error(error.to_string()),
+  })
+}
+
+async fn create(Json(request): Json<SkillCreateRequest>) -> Json<ApiResponse<InstalledSkill>> {
+  let config = resolve_from_env();
+  Json(match create_skill_file(request, &config) {
     Ok(skill) => ApiResponse::ok(skill),
     Err(error) => ApiResponse::error(error.to_string()),
   })
@@ -672,7 +811,8 @@ pub fn router() -> Router {
     .route("/yuanling/skills", get(list))
     .route("/yuanling/skills/search", get(search))
     .route("/yuanling/skills/install", post(install))
-    .route("/yuanling/skills/{id}", get(load))
+    .route("/yuanling/skills/create", post(create))
+    .route("/yuanling/skills/{id}", get(load).put(update))
     .route("/yuanling/skills/{id}/status", put(update_status))
 }
 

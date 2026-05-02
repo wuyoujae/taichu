@@ -345,6 +345,11 @@ pub struct McpServerUpsertRequest {
   pub config: McpServerConfig,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct McpReadResourceRequest {
+  pub uri: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct McpServerStatusView {
   pub name: String,
@@ -1211,11 +1216,40 @@ async fn discover() -> Json<ApiResponse<McpToolDiscoveryReport>> {
   Json(ApiResponse::ok(report))
 }
 
+async fn list_server_resources(
+  AxumPath(name): AxumPath<String>,
+) -> Json<ApiResponse<McpListResourcesResult>> {
+  let config = resolve_from_env();
+  let mut manager = McpServerManager::from_config(&config);
+  let result = manager.list_resources(&name).await;
+  let _ = manager.shutdown().await;
+  Json(match result {
+    Ok(resources) => ApiResponse::ok(resources),
+    Err(error) => ApiResponse::error(error.to_string()),
+  })
+}
+
+async fn read_server_resource(
+  AxumPath(name): AxumPath<String>,
+  Json(request): Json<McpReadResourceRequest>,
+) -> Json<ApiResponse<McpReadResourceResult>> {
+  let config = resolve_from_env();
+  let mut manager = McpServerManager::from_config(&config);
+  let result = manager.read_resource(&name, &request.uri).await;
+  let _ = manager.shutdown().await;
+  Json(match result {
+    Ok(resource) => ApiResponse::ok(resource),
+    Err(error) => ApiResponse::error(error.to_string()),
+  })
+}
+
 pub fn router() -> Router {
   Router::new()
     .route("/yuanling/mcp/config", get(config))
     .route("/yuanling/mcp/servers", get(list_servers).post(create_server))
     .route("/yuanling/mcp/servers/{name}", put(update_server).delete(remove_server))
+    .route("/yuanling/mcp/servers/{name}/resources", get(list_server_resources))
+    .route("/yuanling/mcp/servers/{name}/resources/read", post(read_server_resource))
     .route("/yuanling/mcp/discover", post(discover))
 }
 

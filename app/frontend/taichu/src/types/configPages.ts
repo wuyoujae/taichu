@@ -91,3 +91,27 @@ export type McpDiscoveryReport = {
   unsupported_servers: Array<{ server_name: string; transport: McpTransport; reason: string }>;
   degraded: boolean;
 };
+
+export type McpResource = {
+  uri: string;
+  name?: string;
+  description?: string;
+  mimeType?: string;
+  mime_type?: string;
+};
+
+export type McpListResourcesResult = {
+  resources: McpResource[];
+  nextCursor?: string;
+  next_cursor?: string;
+};
+
+export type McpReadResourceResult = {
+  contents: Array<{
+    uri: string;
+    mimeType?: string;
+    mime_type?: string;
+    text?: string;
+    blob?: string;
+  }>;
+};

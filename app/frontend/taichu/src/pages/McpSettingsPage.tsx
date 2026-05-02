@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Cloud, Database, FileText, FolderX, Loader2, Plus, RefreshCw, Search, Server, Settings2, Trash2, Wrench, X } from "lucide-react";
 import { apiClient } from "../api/client";
 import { message } from "../components/message";
-import type { McpConfigView, McpDiscoveryReport, McpServerAdminView, McpServerConfig, McpTransport } from "../types/configPages";
+import type { McpConfigView, McpDiscoveryReport, McpListResourcesResult, McpReadResourceResult, McpResource, McpServerAdminView, McpServerConfig, McpTransport } from "../types/configPages";
 import "./McpSettingsPage.css";
 
 type McpFormState = { originalName?: string; name: string; transport: McpTransport; command: string; args: string; envRows: Array<{ key: string; value: string }>; url: string; timeout: number };
@@ -25,6 +25,10 @@ export function McpSettingsPage() {
   const [saving, setSaving] = useState(false);
   const [discovering, setDiscovering] = useState(false);
   const [search, setSearch] = useState("");
+  const [discoveryReport, setDiscoveryReport] = useState<McpDiscoveryReport | null>(null);
+  const [resourceServer, setResourceServer] = useState<string | null>(null);
+  const [resources, setResources] = useState<McpResource[]>([]);
+  const [resourceText, setResourceText] = useState("");
 
   async function loadServers(nextName?: string) {
     setLoading(true);
@@ -46,7 +50,9 @@ export function McpSettingsPage() {
 
   async function saveServer() { setSaving(true); try { const payload = { name: form.name, config: configFromForm(form) }; const saved = form.originalName ? await apiClient.put<McpServerAdminView>(`/yuanling/mcp/servers/${encodeURIComponent(form.originalName)}`, payload) : await apiClient.post<McpServerAdminView>("/yuanling/mcp/servers", payload); setSheetOpen(false); message.info("Server Saved", "Connecting to the MCP Server..."); await loadServers(saved.name); } finally { setSaving(false); } }
   async function deleteServer(server: McpServerAdminView) { const ok = await message.confirm({ title: `Remove "${server.name}"?`, desc: "This will disconnect the MCP server from local page configuration.", confirmText: "Remove Server", destructive: true }); if (!ok) return; await apiClient.delete<string>(`/yuanling/mcp/servers/${encodeURIComponent(server.name)}`); message.success("Server Removed", `${server.name} has been disconnected.`); await loadServers(); }
-  async function discoverTools() { setDiscovering(true); try { const report = await apiClient.post<McpDiscoveryReport>("/yuanling/mcp/discover"); message.info("Syncing", `${report.tools.length} tools discovered, ${report.failed_servers.length} servers failed.`); await loadServers(); } finally { setDiscovering(false); } }
+  async function discoverTools() { setDiscovering(true); try { const report = await apiClient.post<McpDiscoveryReport>("/yuanling/mcp/discover"); setDiscoveryReport(report); message.info("Syncing", `${report.tools.length} tools discovered, ${report.failed_servers.length} servers failed.`); await loadServers(); } finally { setDiscovering(false); } }
+  async function listResources(server: McpServerAdminView) { try { const result = await apiClient.get<McpListResourcesResult>(`/yuanling/mcp/servers/${encodeURIComponent(server.name)}/resources`); setResourceServer(server.name); setResources(result.resources || []); setResourceText(""); message.success("Resources Loaded", `${result.resources?.length || 0} resources found on ${server.name}.`); } catch { setResourceServer(null); setResources([]); } }
+  async function readResource(resource: McpResource) { if (!resourceServer) return; const result = await apiClient.post<McpReadResourceResult>(`/yuanling/mcp/servers/${encodeURIComponent(resourceServer)}/resources/read`, { uri: resource.uri }); const text = result.contents?.map((item) => item.text || item.blob || "").filter(Boolean).join("\n") || "No readable text content."; setResourceText(text); }
 
   return (
     <main className="main-content mcp-prototype">
@@ -68,11 +74,17 @@ export function McpSettingsPage() {
             <div className="item-info">
               <div className="item-title-row"><span className="item-title">{server.name}</span><span className={`badge ${server.config.type}`}>{server.config.type}</span><div className="status-indicator"><div className={`status-dot ${healthy ? "connected" : "error"}`} />{healthy ? "Connected" : "Connection Error"}</div></div>
               <div className="item-command">{server.config.type === "stdio" ? [server.config.command, ...(server.config.args || [])].join(" ") : server.config.url}</div>
-              <div className="item-meta"><span><Wrench size={12} /> {config?.configured_count || 0} Servers</span><span><FileText size={12} /> {server.detail || server.status}</span></div>
+              <div className="item-meta"><span><Wrench size={12} /> {discoveryReport?.tools.filter((tool) => tool.server_name === server.name).length || 0} Tools</span><button type="button" onClick={() => void listResources(server)}><FileText size={12} /> Resources</button><span>{server.detail || server.status}</span></div>
             </div>
             <div className="item-actions"><button className="btn-icon spin" type="button" title="Reload Server" onClick={() => void discoverTools()}><RefreshCw size={16} /></button><button className="btn-icon" type="button" title="Settings" onClick={() => openSheet("Edit Server", server)}><Settings2 size={16} /></button><button className="btn-icon danger" type="button" onClick={() => void deleteServer(server)}><Trash2 size={16} /></button></div>
           </div>;
         }) : <div className="empty-row">No MCP servers configured.</div>}
+      </div>
+
+      <div className={`resource-panel${resourceServer ? " show" : ""}`}>
+        <div className="resource-panel-header"><strong>{resourceServer} Resources</strong><button type="button" onClick={() => setResourceServer(null)}><X size={16} /></button></div>
+        <div className="resource-list">{resources.length ? resources.map((resource) => <button key={resource.uri} type="button" onClick={() => void readResource(resource)}><span>{resource.name || resource.uri}</span><small>{resource.uri}</small></button>) : <p>No resources loaded.</p>}</div>
+        {resourceText ? <pre className="resource-preview">{resourceText}</pre> : null}
       </div>
 
       <div className={`overlay${sheetOpen ? " show" : ""}`} onClick={() => setSheetOpen(false)} />
