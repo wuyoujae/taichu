@@ -69,4 +69,6 @@ pub fn router() -> Router {
   Router::new()
     .route("/yuanling/status", get(status))
     .merge(ai::router())
+    .merge(skills::router())
+    .merge(mcp::router())
 }

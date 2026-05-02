@@ -1,3 +1,8 @@
+use axum::{
+  extract::{Path as AxumPath, Query},
+  routing::{get, post, put},
+  Json, Router,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
@@ -187,7 +192,7 @@ impl SkillsModuleConfig {
         .map(|items| items.len())
         .unwrap_or(0),
       skills: registry
-        .descriptors(self.allowed_skills.as_ref())
+        .all_descriptors(self.allowed_skills.as_ref())
         .unwrap_or_default(),
     }
   }
@@ -298,6 +303,18 @@ impl SkillRegistry {
       .skills
       .iter()
       .filter(|record| record.descriptor.enabled)
+      .filter(|record| is_skill_allowed(&record.descriptor.id, allowed_skills))
+      .map(|record| record.descriptor.clone())
+      .collect())
+  }
+
+  pub fn all_descriptors(
+    &self,
+    allowed_skills: Option<&BTreeSet<String>>,
+  ) -> Result<Vec<SkillDescriptor>, SkillError> {
+    Ok(self
+      .skills
+      .iter()
       .filter(|record| is_skill_allowed(&record.descriptor.id, allowed_skills))
       .map(|record| record.descriptor.clone())
       .collect())
@@ -496,6 +513,169 @@ pub fn install_skill(source: &Path, config: &SkillsModuleConfig) -> Result<Insta
   })
 }
 
+pub fn set_skill_status(
+  skill_id: &str,
+  status: SkillStatus,
+  config: &SkillsModuleConfig,
+) -> Result<SkillDescriptor, SkillError> {
+  if !config.enabled {
+    return Err(SkillError::Disabled);
+  }
+  let registry = SkillRegistry::discover(config)?;
+  let requested = normalize_skill_id(skill_id);
+  let descriptor = registry
+    .all_descriptors(None)?
+    .into_iter()
+    .find(|skill| skill.id == requested)
+    .ok_or_else(|| SkillError::UnknownSkill(skill_id.to_string()))?;
+  if descriptor.source == SkillSource::Runtime || descriptor.path.as_os_str().is_empty() {
+    return Err(SkillError::InvalidInput(
+      "runtime skills cannot be updated through file status".to_string(),
+    ));
+  }
+  let contents = fs::read_to_string(&descriptor.path).map_err(io_to_skill_error)?;
+  let updated = upsert_skill_status_frontmatter(&contents, status.label(), &descriptor);
+  fs::write(&descriptor.path, updated.as_bytes()).map_err(io_to_skill_error)?;
+
+  let refreshed = SkillRegistry::discover(config)?;
+  refreshed
+    .all_descriptors(None)?
+    .into_iter()
+    .find(|skill| skill.id == requested)
+    .ok_or_else(|| SkillError::UnknownSkill(skill_id.to_string()))
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApiResponse<T> {
+  pub success: bool,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub data: Option<T>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub message: Option<String>,
+}
+
+impl<T> ApiResponse<T> {
+  fn ok(data: T) -> Self {
+    Self {
+      success: true,
+      data: Some(data),
+      message: None,
+    }
+  }
+
+  fn error(message: String) -> Self {
+    Self {
+      success: false,
+      data: None,
+      message: Some(message),
+    }
+  }
+}
+
+#[derive(Debug, Deserialize)]
+struct SkillSearchQuery {
+  q: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SkillInstallRequest {
+  source_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SkillStatusRequest {
+  status: u8,
+}
+
+fn skill_status_from_code(code: u8) -> Result<SkillStatus, SkillError> {
+  match code {
+    1 => Ok(SkillStatus::Active),
+    2 => Ok(SkillStatus::Disabled),
+    3 => Ok(SkillStatus::Deleted),
+    _ => Err(SkillError::InvalidInput(
+      "skill status must be 1(active), 2(disabled), or 3(deleted)".to_string(),
+    )),
+  }
+}
+
+fn discover_view() -> Result<SkillsModuleConfigView, SkillError> {
+  let config = resolve_from_env();
+  let registry = SkillRegistry::discover(&config)?;
+  Ok(config.as_view(&registry))
+}
+
+async fn config() -> Json<ApiResponse<SkillsModuleConfigView>> {
+  Json(match discover_view() {
+    Ok(view) => ApiResponse::ok(view),
+    Err(error) => ApiResponse::error(error.to_string()),
+  })
+}
+
+async fn list() -> Json<ApiResponse<Vec<SkillDescriptor>>> {
+  Json(match discover_view() {
+    Ok(view) => ApiResponse::ok(view.skills),
+    Err(error) => ApiResponse::error(error.to_string()),
+  })
+}
+
+async fn search(Query(query): Query<SkillSearchQuery>) -> Json<ApiResponse<SkillSearchOutput>> {
+  let config = resolve_from_env();
+  let registry = match SkillRegistry::discover(&config) {
+    Ok(registry) => registry,
+    Err(error) => return Json(ApiResponse::error(error.to_string())),
+  };
+  let output = registry.search(
+    query.q.as_deref().unwrap_or_default(),
+    config.max_search_results,
+  );
+  Json(ApiResponse::ok(output))
+}
+
+async fn load(AxumPath(id): AxumPath<String>) -> Json<ApiResponse<SkillLoadResult>> {
+  let config = resolve_from_env();
+  let registry = match SkillRegistry::discover(&config) {
+    Ok(registry) => registry,
+    Err(error) => return Json(ApiResponse::error(error.to_string())),
+  };
+  Json(match registry.load(&id, None, &config) {
+    Ok(skill) => ApiResponse::ok(skill),
+    Err(error) => ApiResponse::error(error.to_string()),
+  })
+}
+
+async fn install(Json(request): Json<SkillInstallRequest>) -> Json<ApiResponse<InstalledSkill>> {
+  let config = resolve_from_env();
+  Json(match install_skill(Path::new(&request.source_path), &config) {
+    Ok(skill) => ApiResponse::ok(skill),
+    Err(error) => ApiResponse::error(error.to_string()),
+  })
+}
+
+async fn update_status(
+  AxumPath(id): AxumPath<String>,
+  Json(request): Json<SkillStatusRequest>,
+) -> Json<ApiResponse<SkillDescriptor>> {
+  let config = resolve_from_env();
+  let status = match skill_status_from_code(request.status) {
+    Ok(status) => status,
+    Err(error) => return Json(ApiResponse::error(error.to_string())),
+  };
+  Json(match set_skill_status(&id, status, &config) {
+    Ok(skill) => ApiResponse::ok(skill),
+    Err(error) => ApiResponse::error(error.to_string()),
+  })
+}
+
+pub fn router() -> Router {
+  Router::new()
+    .route("/yuanling/skills/config", get(config))
+    .route("/yuanling/skills", get(list))
+    .route("/yuanling/skills/search", get(search))
+    .route("/yuanling/skills/install", post(install))
+    .route("/yuanling/skills/{id}", get(load))
+    .route("/yuanling/skills/{id}/status", put(update_status))
+}
+
 fn discover_default_roots() -> Vec<SkillRoot> {
   let mut roots = Vec::new();
   push_unique_root(
@@ -654,6 +834,46 @@ fn strip_frontmatter(contents: &str) -> String {
   contents.to_string()
 }
 
+fn upsert_skill_status_frontmatter(
+  contents: &str,
+  status_label: &str,
+  descriptor: &SkillDescriptor,
+) -> String {
+  let lines = contents.lines().collect::<Vec<_>>();
+  if lines.first().map(|line| line.trim()) != Some("---") {
+    let description = descriptor.description.clone().unwrap_or_default();
+    return format!(
+      "---\nname: {}\ndescription: {}\nstatus: {}\n---\n\n{}",
+      descriptor.name, description, status_label, contents
+    );
+  }
+
+  let mut output = Vec::new();
+  output.push("---".to_string());
+  let mut status_written = false;
+  let mut index = 1;
+  while index < lines.len() {
+    let line = lines[index];
+    if line.trim() == "---" {
+      if !status_written {
+        output.push(format!("status: {status_label}"));
+      }
+      output.push("---".to_string());
+      index += 1;
+      break;
+    }
+    if line.trim_start().starts_with("status:") {
+      output.push(format!("status: {status_label}"));
+      status_written = true;
+    } else {
+      output.push(line.to_string());
+    }
+    index += 1;
+  }
+  output.extend(lines[index..].iter().map(|line| (*line).to_string()));
+  output.join("\n")
+}
+
 fn unquote_frontmatter_value(value: &str) -> String {
   value
     .trim()
@@ -775,4 +995,3 @@ fn env_or_usize(key: &str, default: usize) -> usize {
 fn io_to_skill_error(error: std::io::Error) -> SkillError {
   SkillError::Io(error.to_string())
 }
-

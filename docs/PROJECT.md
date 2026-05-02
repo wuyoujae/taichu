@@ -307,3 +307,15 @@
 
 从长期来看，太初的价值不只在于提供几个角色型智能体，更在于提供一套能够持续演进的智能体工程方法：
 **统一原型、清晰分层、职责分化、协同执行、监督治理。**
+
+------
+
+## 当前配置入口
+
+太初桌面端已经开始提供面向 Yuanling 基础能力的配置页面。当前侧边栏包含：
+
+- **AI**：管理多个 AI 实例，配置 provider、base URL、request path、API key、model、prompt template、stream、max tokens 和采样参数，并支持测试连接。
+- **Skills**：管理本地 `SKILL.md` 技能说明，支持发现、安装、搜索、查看 prompt、启用、禁用和状态删除。
+- **MCP**：管理 Model Context Protocol server 配置，支持 stdio/http/sse/ws 配置录入、轻量 preflight 和 best-effort 工具发现。
+
+这些页面遵循同一套文件持久化原则，不引入数据库。AI 实例、skills 和 MCP server 配置分别保存到 `BACKEND_DATA_DIR` 下的 Yuanling 数据目录中，并继续兼容已有 `.env` 默认配置。

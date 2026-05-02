@@ -1,9 +1,9 @@
-use axum::{routing::{get, post}, Json, Router};
+use axum::{extract::Path as AxumPath, routing::{get, post, put}, Json, Router};
 use reqwest::{header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION, CONTENT_TYPE}, Client, Response, StatusCode};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{json, Map, Value};
-use std::env;
-use std::time::Duration;
+use std::{env, fs, path::PathBuf, time::{Duration, SystemTime, UNIX_EPOCH}};
+use uuid::Uuid;
 
 pub type TopP = f64;
 pub type Temperature = f64;
@@ -13,9 +13,174 @@ const DEFAULT_INITIAL_BACKOFF_SECS: u64 = 1;
 const DEFAULT_MAX_BACKOFF_SECS: u64 = 128;
 const OPENAI_MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
 const ANTHROPIC_DEFAULT_CONTEXT_WINDOW: u32 = 200_000;
+const AI_INSTANCES_VERSION: u32 = 1;
+const AI_INSTANCES_FILE_NAME: &str = "instances.json";
 
 const OPENAI_COMPATIBLE_PROVIDER: &str = "openai-compatible";
 const ANTHROPIC_COMPATIBLE_PROVIDER: &str = "anthropic-compatible";
+
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApiResponse<T> {
+  pub success: bool,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub data: Option<T>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub message: Option<String>,
+}
+
+impl<T> ApiResponse<T> {
+  fn ok(data: T) -> Self {
+    Self {
+      success: true,
+      data: Some(data),
+      message: None,
+    }
+  }
+
+  fn error(message: impl Into<String>) -> Self {
+    Self {
+      success: false,
+      data: None,
+      message: Some(message.into()),
+    }
+  }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AiInstance {
+  pub id: String,
+  pub name: String,
+  pub enabled: bool,
+  pub provider: String,
+  pub base_url: String,
+  pub request_path: String,
+  pub api_key: String,
+  pub model: String,
+  pub prompt_template: String,
+  pub timeout_ms: u64,
+  pub auth_header: String,
+  #[serde(default)]
+  pub stream: bool,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub max_tokens: Option<u32>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub temperature: Option<f64>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub top_p: Option<f64>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub frequency_penalty: Option<f64>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub presence_penalty: Option<f64>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub stop: Option<Vec<String>>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub reasoning_effort: Option<ReasoningEffort>,
+  pub created_at_ms: u64,
+  pub updated_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AiInstanceView {
+  pub id: String,
+  pub name: String,
+  pub enabled: bool,
+  pub provider: String,
+  pub display_name: &'static str,
+  pub base_url: String,
+  pub request_path: String,
+  pub request_url: String,
+  pub model: String,
+  pub prompt_template: String,
+  pub timeout_ms: u64,
+  pub auth_header: String,
+  pub has_api_key: bool,
+  pub stream: bool,
+  pub max_tokens: Option<u32>,
+  pub temperature: Option<f64>,
+  pub top_p: Option<f64>,
+  pub frequency_penalty: Option<f64>,
+  pub presence_penalty: Option<f64>,
+  pub stop: Option<Vec<String>>,
+  pub reasoning_effort: Option<ReasoningEffort>,
+  pub supported_params: AiParamSupport,
+  pub created_at_ms: u64,
+  pub updated_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AiInstanceRegistry {
+  pub version: u32,
+  pub instances: Vec<AiInstance>,
+  pub updated_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AiInstanceRequest {
+  pub name: String,
+  #[serde(default)]
+  pub enabled: Option<bool>,
+  pub provider: String,
+  pub base_url: String,
+  pub request_path: String,
+  #[serde(default)]
+  pub api_key: Option<String>,
+  pub model: String,
+  pub prompt_template: String,
+  pub timeout_ms: u64,
+  pub auth_header: String,
+  #[serde(default)]
+  pub stream: Option<bool>,
+  #[serde(default)]
+  pub max_tokens: Option<u32>,
+  #[serde(default)]
+  pub temperature: Option<f64>,
+  #[serde(default)]
+  pub top_p: Option<f64>,
+  #[serde(default)]
+  pub frequency_penalty: Option<f64>,
+  #[serde(default)]
+  pub presence_penalty: Option<f64>,
+  #[serde(default)]
+  pub stop: Option<Vec<String>>,
+  #[serde(default)]
+  pub reasoning_effort: Option<ReasoningEffort>,
+}
+
+#[derive(Serialize)]
+pub struct AiInstanceTestResult {
+  pub instance: AiInstanceView,
+  pub result: ChatSendResult,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AiInstanceTestRequest {
+  #[serde(default)]
+  pub message: Option<String>,
+  #[serde(default)]
+  pub max_tokens: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AiInstanceError {
+  Io(String),
+  Json(String),
+  InvalidInput(String),
+  NotFound(String),
+}
+
+impl std::fmt::Display for AiInstanceError {
+  fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      Self::Io(message) => write!(formatter, "ai instance io error: {message}"),
+      Self::Json(message) => write!(formatter, "ai instance json error: {message}"),
+      Self::InvalidInput(message) => write!(formatter, "invalid ai instance input: {message}"),
+      Self::NotFound(id) => write!(formatter, "ai instance `{id}` not found"),
+    }
+  }
+}
+
+impl std::error::Error for AiInstanceError {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AiProvider {
@@ -183,6 +348,8 @@ pub struct AiModuleConfig {
   pub enabled: bool,
   pub model: AiModelConfig,
   pub has_api_key: bool,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub api_key: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -559,7 +726,11 @@ async fn send_with_retry(
   let request_payload = request.request.clone();
   let request_body = request_payload.to_string();
   let provider = AiProvider::from_raw(&config.model.provider);
-  let api_key = resolve_api_key_for_provider(&provider).unwrap_or_default();
+  let api_key = config
+    .api_key
+    .clone()
+    .or_else(|| resolve_api_key_for_provider(&provider))
+    .unwrap_or_default();
   let headers = request_headers(&config.model.auth_header, &api_key)?;
   let client = Client::builder()
     .timeout(timeout)
@@ -742,6 +913,7 @@ pub fn default_config() -> AiModuleConfig {
       auth_header: "Authorization".to_string(),
     },
     has_api_key: false,
+    api_key: None,
   }
 }
 
@@ -769,7 +941,251 @@ pub fn resolve_from_env() -> AiModuleConfig {
     has_api_key: resolve_api_key_for_provider(&provider)
       .map(|raw| !raw.trim().is_empty())
       .unwrap_or(false),
+    api_key: None,
   }
+}
+
+
+pub fn load_ai_instances() -> Result<AiInstanceRegistry, AiInstanceError> {
+  let path = ai_instances_path();
+  if !path.exists() {
+    return Ok(empty_ai_instance_registry());
+  }
+  let contents = fs::read_to_string(path).map_err(|error| AiInstanceError::Io(error.to_string()))?;
+  serde_json::from_str(&contents).map_err(|error| AiInstanceError::Json(error.to_string()))
+}
+
+pub fn save_ai_instances(registry: &AiInstanceRegistry) -> Result<(), AiInstanceError> {
+  let storage_dir = ai_instances_storage_dir();
+  fs::create_dir_all(&storage_dir).map_err(|error| AiInstanceError::Io(error.to_string()))?;
+  let body = serde_json::to_string_pretty(registry)
+    .map_err(|error| AiInstanceError::Json(error.to_string()))?;
+  fs::write(ai_instances_path(), body).map_err(|error| AiInstanceError::Io(error.to_string()))
+}
+
+pub fn create_ai_instance(request: AiInstanceRequest) -> Result<AiInstanceView, AiInstanceError> {
+  let mut registry = load_ai_instances()?;
+  let now = now_ms();
+  let instance = build_ai_instance(request, None, now)?;
+  let view = instance.view();
+  registry.instances.push(instance);
+  registry.updated_at_ms = now;
+  save_ai_instances(&registry)?;
+  Ok(view)
+}
+
+pub fn update_ai_instance(
+  id: &str,
+  request: AiInstanceRequest,
+) -> Result<AiInstanceView, AiInstanceError> {
+  let mut registry = load_ai_instances()?;
+  let now = now_ms();
+  let existing = registry
+    .instances
+    .iter()
+    .find(|instance| instance.id == id)
+    .cloned()
+    .ok_or_else(|| AiInstanceError::NotFound(id.to_string()))?;
+  let updated = build_ai_instance(request, Some(existing), now)?;
+  let view = updated.view();
+  if let Some(slot) = registry.instances.iter_mut().find(|instance| instance.id == id) {
+    *slot = updated;
+  }
+  registry.updated_at_ms = now;
+  save_ai_instances(&registry)?;
+  Ok(view)
+}
+
+pub fn delete_ai_instance(id: &str) -> Result<(), AiInstanceError> {
+  let mut registry = load_ai_instances()?;
+  let before = registry.instances.len();
+  registry.instances.retain(|instance| instance.id != id);
+  if registry.instances.len() == before {
+    return Err(AiInstanceError::NotFound(id.to_string()));
+  }
+  registry.updated_at_ms = now_ms();
+  save_ai_instances(&registry)
+}
+
+pub fn list_ai_instances() -> Result<Vec<AiInstanceView>, AiInstanceError> {
+  Ok(load_ai_instances()?.instances.into_iter().map(|instance| instance.view()).collect())
+}
+
+pub fn get_ai_instance_config(id: &str) -> Result<AiModuleConfig, AiInstanceError> {
+  let instance = load_ai_instances()?
+    .instances
+    .into_iter()
+    .find(|instance| instance.id == id)
+    .ok_or_else(|| AiInstanceError::NotFound(id.to_string()))?;
+  Ok(instance.to_module_config())
+}
+
+impl AiInstance {
+  fn view(&self) -> AiInstanceView {
+    let provider = AiProvider::from_raw(&self.provider);
+    AiInstanceView {
+      id: self.id.clone(),
+      name: self.name.clone(),
+      enabled: self.enabled,
+      provider: self.provider.clone(),
+      display_name: provider.display_name(),
+      base_url: self.base_url.clone(),
+      request_path: self.request_path.clone(),
+      request_url: request_url_from_parts(&self.base_url, &self.request_path),
+      model: self.model.clone(),
+      prompt_template: self.prompt_template.clone(),
+      timeout_ms: self.timeout_ms,
+      auth_header: self.auth_header.clone(),
+      has_api_key: !self.api_key.trim().is_empty(),
+      stream: self.stream,
+      max_tokens: self.max_tokens,
+      temperature: self.temperature,
+      top_p: self.top_p,
+      frequency_penalty: self.frequency_penalty,
+      presence_penalty: self.presence_penalty,
+      stop: self.stop.clone(),
+      reasoning_effort: self.reasoning_effort.clone(),
+      supported_params: provider.supports(),
+      created_at_ms: self.created_at_ms,
+      updated_at_ms: self.updated_at_ms,
+    }
+  }
+
+  fn to_module_config(&self) -> AiModuleConfig {
+    AiModuleConfig {
+      enabled: self.enabled,
+      model: AiModelConfig {
+        provider: self.provider.clone(),
+        model_id: self.model.clone(),
+        endpoint: self.base_url.clone(),
+        request_path: self.request_path.clone(),
+        prompt_template: self.prompt_template.clone(),
+        timeout_ms: self.timeout_ms,
+        auth_header: self.auth_header.clone(),
+      },
+      has_api_key: !self.api_key.trim().is_empty(),
+      api_key: (!self.api_key.trim().is_empty()).then(|| self.api_key.clone()),
+    }
+  }
+}
+
+fn build_ai_instance(
+  request: AiInstanceRequest,
+  existing: Option<AiInstance>,
+  now: u64,
+) -> Result<AiInstance, AiInstanceError> {
+  let existing_id = existing.as_ref().map(|instance| instance.id.clone());
+  let existing_created_at = existing.as_ref().map(|instance| instance.created_at_ms);
+  let existing_api_key = existing.as_ref().map(|instance| instance.api_key.clone()).unwrap_or_default();
+  let provider = AiProvider::from_raw(&request.provider);
+  let provider_name = provider.provider_name().to_string();
+  let name = required_text(request.name, "name")?;
+  let base_url = optional_or_default(request.base_url, provider.default_endpoint());
+  let request_path = optional_or_default(request.request_path, provider.default_request_path());
+  let model = optional_or_default(request.model, provider.default_model());
+  let prompt_template = optional_or_default(request.prompt_template, "You are YUANLING, a practical assistant.");
+  let auth_header = optional_or_default(request.auth_header, provider.default_auth_header());
+  let api_key = request
+    .api_key
+    .map(|value| value.trim().to_string())
+    .filter(|value| !value.is_empty())
+    .unwrap_or(existing_api_key);
+
+  Ok(AiInstance {
+    id: existing_id.unwrap_or_else(|| Uuid::new_v4().to_string()),
+    name,
+    enabled: request.enabled.unwrap_or(true),
+    provider: provider_name,
+    base_url,
+    request_path,
+    api_key,
+    model,
+    prompt_template,
+    timeout_ms: if request.timeout_ms == 0 { 60_000 } else { request.timeout_ms },
+    auth_header,
+    stream: request.stream.unwrap_or(false),
+    max_tokens: request.max_tokens,
+    temperature: request.temperature,
+    top_p: request.top_p,
+    frequency_penalty: request.frequency_penalty,
+    presence_penalty: request.presence_penalty,
+    stop: request.stop.map(normalize_stop),
+    reasoning_effort: request.reasoning_effort,
+    created_at_ms: existing_created_at.unwrap_or(now),
+    updated_at_ms: now,
+  })
+}
+
+fn empty_ai_instance_registry() -> AiInstanceRegistry {
+  AiInstanceRegistry {
+    version: AI_INSTANCES_VERSION,
+    instances: Vec::new(),
+    updated_at_ms: now_ms(),
+  }
+}
+
+fn ai_instances_storage_dir() -> PathBuf {
+  env::var("YUANLING_AI_INSTANCES_STORAGE_DIR")
+    .ok()
+    .map(|value| value.trim().to_string())
+    .filter(|value| !value.is_empty())
+    .map(PathBuf::from)
+    .unwrap_or_else(|| {
+      PathBuf::from(env_or("BACKEND_DATA_DIR", "./data"))
+        .join("yuanling")
+        .join("ai")
+    })
+}
+
+fn ai_instances_path() -> PathBuf {
+  ai_instances_storage_dir().join(AI_INSTANCES_FILE_NAME)
+}
+
+fn request_url_from_parts(base_url: &str, request_path: &str) -> String {
+  let base = base_url.trim_end_matches('/');
+  let path_without_leading = request_path.trim_start_matches('/');
+  if path_without_leading.is_empty() {
+    return base.to_string();
+  }
+  let path_suffix = format!("/{path_without_leading}");
+  if base.to_ascii_lowercase().ends_with(&path_suffix.to_ascii_lowercase()) {
+    base.to_string()
+  } else {
+    format!("{base}/{path_without_leading}")
+  }
+}
+
+fn required_text(value: String, field: &str) -> Result<String, AiInstanceError> {
+  let value = value.trim().to_string();
+  if value.is_empty() {
+    Err(AiInstanceError::InvalidInput(format!("{field} is required")))
+  } else {
+    Ok(value)
+  }
+}
+
+fn optional_or_default(value: String, default: &str) -> String {
+  let value = value.trim().to_string();
+  if value.is_empty() {
+    default.to_string()
+  } else {
+    value
+  }
+}
+
+fn normalize_stop(values: Vec<String>) -> Vec<String> {
+  values
+    .into_iter()
+    .map(|value| value.trim().to_string())
+    .filter(|value| !value.is_empty())
+    .collect()
+}
+
+fn now_ms() -> u64 {
+  SystemTime::now()
+    .duration_since(UNIX_EPOCH)
+    .map(|duration| duration.as_millis() as u64)
+    .unwrap_or_default()
 }
 
 fn push_skipped(skipped_params: &mut Vec<String>, params: &[&str]) {
@@ -1063,6 +1479,86 @@ async fn send(Json(request): Json<ChatComposeRequest>) -> Json<ChatSendResult> {
   Json(send_chat_request(request, &config).await)
 }
 
+async fn list_instances() -> Json<ApiResponse<Vec<AiInstanceView>>> {
+  Json(match list_ai_instances() {
+    Ok(instances) => ApiResponse::ok(instances),
+    Err(error) => ApiResponse::error(error.to_string()),
+  })
+}
+
+async fn create_instance(Json(request): Json<AiInstanceRequest>) -> Json<ApiResponse<AiInstanceView>> {
+  Json(match create_ai_instance(request) {
+    Ok(instance) => ApiResponse::ok(instance),
+    Err(error) => ApiResponse::error(error.to_string()),
+  })
+}
+
+async fn update_instance(
+  AxumPath(id): AxumPath<String>,
+  Json(request): Json<AiInstanceRequest>,
+) -> Json<ApiResponse<AiInstanceView>> {
+  Json(match update_ai_instance(&id, request) {
+    Ok(instance) => ApiResponse::ok(instance),
+    Err(error) => ApiResponse::error(error.to_string()),
+  })
+}
+
+async fn remove_instance(AxumPath(id): AxumPath<String>) -> Json<ApiResponse<String>> {
+  Json(match delete_ai_instance(&id) {
+    Ok(()) => ApiResponse::ok(id),
+    Err(error) => ApiResponse::error(error.to_string()),
+  })
+}
+
+async fn test_instance(
+  AxumPath(id): AxumPath<String>,
+  test_request: Option<Json<AiInstanceTestRequest>>,
+) -> Json<ApiResponse<AiInstanceTestResult>> {
+  let registry = match load_ai_instances() {
+    Ok(registry) => registry,
+    Err(error) => return Json(ApiResponse::error(error.to_string())),
+  };
+  let Some(instance) = registry.instances.iter().find(|instance| instance.id == id).cloned() else {
+    return Json(ApiResponse::error(AiInstanceError::NotFound(id).to_string()));
+  };
+  let config = instance.to_module_config();
+  let test_request = test_request.map(|Json(request)| request).unwrap_or_default();
+  let test_message = test_request
+    .message
+    .map(|value| value.trim().to_string())
+    .filter(|value| !value.is_empty())
+    .unwrap_or_else(|| {
+      "Please reply with one short sentence confirming this AI instance is working.".to_string()
+    });
+  let request = ChatComposeRequest {
+    model: None,
+    max_tokens: test_request.max_tokens.or(instance.max_tokens).or(Some(128)),
+    messages: vec![InputMessage {
+      role: "user".to_string(),
+      content: vec![InputContentBlock::Text {
+        text: test_message,
+      }],
+    }],
+    user_input: None,
+    system: Some(instance.prompt_template.clone()),
+    stream: false,
+    tools: None,
+    tool_choice: None,
+    temperature: instance.temperature,
+    top_p: instance.top_p,
+    frequency_penalty: instance.frequency_penalty,
+    presence_penalty: instance.presence_penalty,
+    stop: instance.stop.clone(),
+    reasoning_effort: instance.reasoning_effort.clone(),
+  };
+  let result = send_chat_request(request, &config).await;
+  Json(ApiResponse::ok(AiInstanceTestResult {
+    instance: instance.view(),
+    result,
+  }))
+}
+
+
 async fn config() -> Json<AiModuleConfigView> {
   Json(resolve_from_env().as_view())
 }
@@ -1076,4 +1572,7 @@ pub fn router() -> Router {
     .route("/yuanling/ai/config", get(config))
     .route("/yuanling/ai/compose", post(compose))
     .route("/yuanling/ai/send", post(send))
+    .route("/yuanling/ai/instances", get(list_instances).post(create_instance))
+    .route("/yuanling/ai/instances/{id}", put(update_instance).delete(remove_instance))
+    .route("/yuanling/ai/instances/{id}/test", post(test_instance))
 }

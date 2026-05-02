@@ -1,6 +1,7 @@
 use axum::{routing::get, Json, Router};
 use serde_json::json;
 use std::{env, path::PathBuf};
+use tower_http::cors::CorsLayer;
 
 mod yuanling;
 mod spiritkind;
@@ -27,7 +28,8 @@ async fn main() {
 
   let app = Router::new()
     .route("/health", get(health))
-    .merge(yuanling::router());
+    .merge(yuanling::router())
+    .layer(CorsLayer::permissive());
   let listener = match tokio::net::TcpListener::bind(&bind_addr).await {
     Ok(listener) => listener,
     Err(err) => {

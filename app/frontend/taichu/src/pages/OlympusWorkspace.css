@@ -46,7 +46,7 @@ ul {
 .app-container {
   display: flex;
   width: 100vw;
-  height: 100vh;
+  height: 100%;
 }
 
 .sidebar-primary {

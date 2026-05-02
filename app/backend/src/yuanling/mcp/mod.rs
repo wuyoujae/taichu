@@ -1,12 +1,18 @@
 use super::tools::{
   RuntimeToolDefinition, ToolError, ToolExecutionOutput, ToolExecutor, ToolPermissionMode,
 };
+use axum::{
+  extract::Path as AxumPath,
+  routing::{get, post, put},
+  Json, Router,
+};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::env;
 use std::fmt::{Display, Formatter};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -317,6 +323,26 @@ pub struct McpModuleConfigView {
   pub resource_timeout_ms: u64,
   pub degraded: bool,
   pub servers: Vec<McpServerStatusView>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpServerAdminView {
+  pub name: String,
+  pub config: McpServerConfig,
+  pub status: McpServerStatus,
+  pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct McpStoredConfig {
+  version: u32,
+  servers: BTreeMap<String, McpServerConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct McpServerUpsertRequest {
+  pub name: String,
+  pub config: McpServerConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -983,9 +1009,11 @@ impl ToolExecutor for McpToolExecutor {
 }
 
 pub fn resolve_from_env() -> McpModuleConfig {
-  let servers = env_or_optional("YUANLING_MCP_SERVERS_JSON")
+  let mut servers = load_mcp_servers_from_storage().unwrap_or_default();
+  let env_servers = env_or_optional("YUANLING_MCP_SERVERS_JSON")
     .and_then(|raw| parse_servers_json(&raw).ok())
     .unwrap_or_default();
+  servers.extend(env_servers);
 
   McpModuleConfig {
     enabled: env_or_bool("YUANLING_MCP_ENABLED", true),
@@ -1004,6 +1032,191 @@ pub fn resolve_from_env() -> McpModuleConfig {
     ),
     resource_timeout_ms: env_or_u64("YUANLING_MCP_RESOURCE_TIMEOUT_MS", DEFAULT_RESOURCE_TIMEOUT_MS),
   }
+}
+
+pub fn mcp_storage_dir() -> PathBuf {
+  if let Some(path) = env_or_optional("YUANLING_MCP_CONFIG_STORAGE_DIR") {
+    return PathBuf::from(path);
+  }
+  env_or_optional("BACKEND_DATA_DIR")
+    .map(PathBuf::from)
+    .unwrap_or_else(|| PathBuf::from("./data"))
+    .join("yuanling")
+    .join("mcp")
+}
+
+fn mcp_storage_file() -> PathBuf {
+  mcp_storage_dir().join("servers.json")
+}
+
+pub fn load_mcp_servers_from_storage() -> Result<BTreeMap<String, McpServerConfig>, McpError> {
+  let path = mcp_storage_file();
+  if !path.is_file() {
+    return Ok(BTreeMap::new());
+  }
+  let contents = fs::read_to_string(&path).map_err(|error| McpError::Io(error.to_string()))?;
+  let stored: McpStoredConfig =
+    serde_json::from_str(&contents).map_err(|error| McpError::Config(error.to_string()))?;
+  Ok(stored.servers)
+}
+
+pub fn save_mcp_servers_to_storage(
+  servers: &BTreeMap<String, McpServerConfig>,
+) -> Result<(), McpError> {
+  let path = mcp_storage_file();
+  if let Some(parent) = path.parent() {
+    fs::create_dir_all(parent).map_err(|error| McpError::Io(error.to_string()))?;
+  }
+  let stored = McpStoredConfig {
+    version: 1,
+    servers: servers.clone(),
+  };
+  let contents =
+    serde_json::to_string_pretty(&stored).map_err(|error| McpError::Config(error.to_string()))?;
+  fs::write(path, contents.as_bytes()).map_err(|error| McpError::Io(error.to_string()))
+}
+
+pub fn upsert_mcp_server(
+  request: McpServerUpsertRequest,
+) -> Result<McpServerAdminView, McpError> {
+  let name = normalize_mcp_server_id(&request.name)?;
+  let mut servers = load_mcp_servers_from_storage()?;
+  servers.insert(name.clone(), request.config);
+  save_mcp_servers_to_storage(&servers)?;
+  list_mcp_server_admin_views()?
+    .into_iter()
+    .find(|server| server.name == name)
+    .ok_or_else(|| McpError::Config(format!("MCP server `{name}` was not saved")))
+}
+
+pub fn delete_mcp_server(name: &str) -> Result<String, McpError> {
+  let name = normalize_mcp_server_id(name)?;
+  let mut servers = load_mcp_servers_from_storage()?;
+  servers.remove(&name);
+  save_mcp_servers_to_storage(&servers)?;
+  Ok(name)
+}
+
+pub fn list_mcp_server_admin_views() -> Result<Vec<McpServerAdminView>, McpError> {
+  let config = resolve_from_env();
+  let statuses = preflight_config(&config)
+    .servers
+    .into_iter()
+    .map(|server| (server.name.clone(), server))
+    .collect::<BTreeMap<_, _>>();
+  Ok(config
+    .servers
+    .into_iter()
+    .map(|(name, server_config)| {
+      let status = statuses.get(&name);
+      McpServerAdminView {
+        name,
+        config: server_config,
+        status: status
+          .map(|server| server.status)
+          .unwrap_or(McpServerStatus::Configured),
+        detail: status.and_then(|server| server.detail.clone()),
+      }
+    })
+    .collect())
+}
+
+fn normalize_mcp_server_id(value: &str) -> Result<String, McpError> {
+  let normalized = value.trim();
+  if normalized.is_empty() {
+    return Err(McpError::Config("MCP server name is required".to_string()));
+  }
+  if normalized
+    .chars()
+    .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
+  {
+    Ok(normalized.to_string())
+  } else {
+    Err(McpError::Config(
+      "MCP server name may only contain letters, numbers, underscores, and hyphens".to_string(),
+    ))
+  }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApiResponse<T> {
+  pub success: bool,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub data: Option<T>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub message: Option<String>,
+}
+
+impl<T> ApiResponse<T> {
+  fn ok(data: T) -> Self {
+    Self {
+      success: true,
+      data: Some(data),
+      message: None,
+    }
+  }
+
+  fn error(message: String) -> Self {
+    Self {
+      success: false,
+      data: None,
+      message: Some(message),
+    }
+  }
+}
+
+async fn config() -> Json<ApiResponse<McpModuleConfigView>> {
+  Json(ApiResponse::ok(resolve_from_env().as_view()))
+}
+
+async fn list_servers() -> Json<ApiResponse<Vec<McpServerAdminView>>> {
+  Json(match list_mcp_server_admin_views() {
+    Ok(servers) => ApiResponse::ok(servers),
+    Err(error) => ApiResponse::error(error.to_string()),
+  })
+}
+
+async fn create_server(
+  Json(request): Json<McpServerUpsertRequest>,
+) -> Json<ApiResponse<McpServerAdminView>> {
+  Json(match upsert_mcp_server(request) {
+    Ok(server) => ApiResponse::ok(server),
+    Err(error) => ApiResponse::error(error.to_string()),
+  })
+}
+
+async fn update_server(
+  AxumPath(name): AxumPath<String>,
+  Json(mut request): Json<McpServerUpsertRequest>,
+) -> Json<ApiResponse<McpServerAdminView>> {
+  request.name = name;
+  Json(match upsert_mcp_server(request) {
+    Ok(server) => ApiResponse::ok(server),
+    Err(error) => ApiResponse::error(error.to_string()),
+  })
+}
+
+async fn remove_server(AxumPath(name): AxumPath<String>) -> Json<ApiResponse<String>> {
+  Json(match delete_mcp_server(&name) {
+    Ok(name) => ApiResponse::ok(name),
+    Err(error) => ApiResponse::error(error.to_string()),
+  })
+}
+
+async fn discover() -> Json<ApiResponse<McpToolDiscoveryReport>> {
+  let config = resolve_from_env();
+  let mut manager = McpServerManager::from_config(&config);
+  let report = manager.discover_tools_best_effort().await;
+  let _ = manager.shutdown().await;
+  Json(ApiResponse::ok(report))
+}
+
+pub fn router() -> Router {
+  Router::new()
+    .route("/yuanling/mcp/config", get(config))
+    .route("/yuanling/mcp/servers", get(list_servers).post(create_server))
+    .route("/yuanling/mcp/servers/{name}", put(update_server).delete(remove_server))
+    .route("/yuanling/mcp/discover", post(discover))
 }
 
 pub fn parse_servers_json(raw: &str) -> Result<BTreeMap<String, McpServerConfig>, McpError> {
@@ -1215,4 +1428,3 @@ fn env_or_u64(key: &str, default: u64) -> u64 {
     .and_then(|raw| raw.parse::<u64>().ok())
     .unwrap_or(default)
 }
-

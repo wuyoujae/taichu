@@ -1,3 +1,82 @@
 #root {
   width: 100%;
 }
+
+.app-shell {
+  width: 100%;
+  min-height: 100vh;
+  background: #ffffff;
+}
+
+.custom-titlebar {
+  height: 32px;
+  width: 100%;
+  background: #ffffff;
+  border-bottom: 1px solid #efefef;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 10px;
+  -webkit-app-region: drag;
+}
+
+.darwin-titlebar-drag {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 32px;
+  background: #ffffff;
+  -webkit-app-region: drag;
+  z-index: 1000;
+}
+
+.titlebar-drag {
+  flex: 1;
+  height: 100%;
+}
+
+.window-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  -webkit-app-region: no-drag;
+}
+
+.window-control {
+  width: 28px;
+  height: 20px;
+  border-radius: 4px;
+  background: #f4f4f5;
+  color: #27272a;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.window-control:hover {
+  background: #e4e4e7;
+}
+
+.window-control.close:hover {
+  background: #ffe4e4;
+  color: #b91c1c;
+}
+
+.app-shell-content {
+  width: 100%;
+}
+
+.app-shell-content.with-titlebar {
+  height: calc(100vh - 32px);
+}
+
+.app-shell-content.without-titlebar {
+  height: 100vh;
+}
+
+.app-shell-content.with-darwin-titlebar {
+  box-sizing: border-box;
+  padding-top: 32px;
+}

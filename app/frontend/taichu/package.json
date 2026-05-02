@@ -5,14 +5,15 @@
   "main": "electron/main.js",
   "scripts": {
     "dev": "concurrently \"npm run dev:vite\" \"npm run dev:electron\"",
-    "dev:vite": "vite",
-    "dev:electron": "electron .",
+    "dev:vite": "vite --port 5174 --strictPort",
+    "dev:electron": "wait-on tcp:5174 && electron .",
     "build": "vite build",
     "start": "npm run dev"
   },
   "dependencies": {
     "react": "19.2.4",
-    "react-dom": "19.2.4"
+    "react-dom": "19.2.4",
+    "lucide-react": "^0.522.0"
   },
   "devDependencies": {
     "@types/node": "^20",

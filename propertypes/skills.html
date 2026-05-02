@@ -1,0 +1,992 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Olympus AI - Skills Management</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        /* === 核心 CSS 变量 === */
+        :root {
+            --background: #ffffff;
+            --foreground: #09090b;
+            --muted: #f4f4f5;
+            --muted-foreground: #71717a;
+            --border: #e4e4e7;
+            --input: #e4e4e7;
+            --primary: #18181b;
+            --primary-foreground: #fafafa;
+
+            --success: #10b981;
+            --error: #ef4444;
+
+            --radius-sm: 0.375rem;
+            --radius-md: 0.5rem;
+            --radius-lg: 0.75rem;
+            --radius-full: 9999px;
+            --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+            --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.05);
+            --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+            --shadow-xl: -10px 0 25px -5px rgb(0 0 0 / 0.1);
+            /* 用于右侧抽屉 */
+            --font-sans: 'Inter', sans-serif;
+
+            --page-bg: #fafafa;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: var(--font-sans);
+            background-color: var(--page-bg);
+            color: var(--foreground);
+            height: 100vh;
+            display: flex;
+            overflow: hidden;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        button {
+            border: none;
+            background: none;
+            cursor: pointer;
+            font-family: inherit;
+        }
+
+        ul {
+            list-style: none;
+        }
+
+        .relative {
+            position: relative;
+        }
+
+        /* === 布局基础 === */
+        .app-container {
+            display: flex;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        /* === 左侧主导航 === */
+        .sidebar-primary {
+            width: 68px;
+            min-width: 68px;
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 1rem 0;
+            background: var(--background);
+            z-index: 20;
+        }
+
+        .logo-box {
+            width: 36px;
+            height: 36px;
+            background: var(--primary);
+            color: var(--primary-foreground);
+            border-radius: var(--radius-md);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 1.2rem;
+            margin-bottom: 2rem;
+        }
+
+        .nav-item {
+            width: 48px;
+            height: 48px;
+            border-radius: var(--radius-md);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: var(--muted-foreground);
+            margin-bottom: 0.5rem;
+            transition: all 0.2s ease;
+            gap: 4px;
+        }
+
+        .nav-item:hover {
+            background-color: var(--muted);
+            color: var(--foreground);
+        }
+
+        .nav-item.active {
+            background-color: var(--muted);
+            color: var(--foreground);
+            font-weight: 500;
+        }
+
+        .nav-item span {
+            font-size: 0.65rem;
+        }
+
+        .sidebar-bottom {
+            margin-top: auto;
+        }
+
+        /* === 主内容区 === */
+        .main-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+            position: relative;
+        }
+
+        .page-header {
+            padding: 2rem 3rem 1.5rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+        }
+
+        .header-title h1 {
+            font-size: 1.5rem;
+            font-weight: 600;
+            letter-spacing: -0.02em;
+            margin-bottom: 0.25rem;
+        }
+
+        .header-title p {
+            color: var(--muted-foreground);
+            font-size: 0.875rem;
+        }
+
+        .header-actions {
+            display: flex;
+            gap: 0.75rem;
+        }
+
+        /* 按钮样式 */
+        .btn {
+            padding: 0.5rem 1rem;
+            border-radius: var(--radius-md);
+            font-size: 0.875rem;
+            font-weight: 500;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .btn-default {
+            background: var(--background);
+            border: 1px solid var(--border);
+            color: var(--foreground);
+        }
+
+        .btn-default:hover {
+            background: var(--muted);
+        }
+
+        .btn-primary {
+            background: var(--foreground);
+            color: var(--background);
+            border: 1px solid var(--foreground);
+        }
+
+        .btn-primary:hover {
+            opacity: 0.9;
+        }
+
+        /* 搜索条 */
+        .toolbar {
+            padding: 0 3rem 1.5rem;
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+        }
+
+        .search-input-box {
+            position: relative;
+            width: 320px;
+        }
+
+        .search-input-box i {
+            position: absolute;
+            left: 0.75rem;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--muted-foreground);
+        }
+
+        .search-input {
+            width: 100%;
+            padding: 0.5rem 1rem 0.5rem 2.25rem;
+            font-size: 0.875rem;
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md);
+            background: var(--background);
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        .search-input:focus {
+            border-color: #a1a1aa;
+        }
+
+        /* === Skills 列表 === */
+        .list-container {
+            padding: 0 3rem 3rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .list-item {
+            background: var(--background);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: 1rem 1.25rem;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+
+        .list-item:hover {
+            border-color: #d4d4d8;
+            box-shadow: var(--shadow-md);
+        }
+
+        .item-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: var(--radius-md);
+            background: var(--muted);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--foreground);
+            border: 1px solid var(--border);
+            flex-shrink: 0;
+        }
+
+        .item-info {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .item-title-row {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 0.25rem;
+        }
+
+        .item-title {
+            font-size: 0.875rem;
+            font-weight: 600;
+            color: var(--foreground);
+        }
+
+        .item-desc {
+            font-size: 0.875rem;
+            color: var(--muted-foreground);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .badge {
+            font-size: 0.65rem;
+            padding: 2px 6px;
+            border-radius: 4px;
+            background: var(--muted);
+            border: 1px solid var(--border);
+            font-weight: 500;
+            color: var(--muted-foreground);
+        }
+
+        .badge.active {
+            background: #dcfce7;
+            color: #15803d;
+            border-color: #bbf7d0;
+        }
+
+        /* 通用 Switch (开关) 组件 Shadcn 风格 */
+        .switch {
+            position: relative;
+            display: inline-flex;
+            width: 44px;
+            height: 24px;
+            flex-shrink: 0;
+            cursor: pointer;
+            border-radius: var(--radius-full);
+            border: 2px solid transparent;
+            transition: background-color 0.2s;
+            background-color: var(--input);
+            /* 默认关闭灰色 */
+        }
+
+        .switch[aria-checked="true"] {
+            background-color: var(--foreground);
+            /* 开启黑色 */
+        }
+
+        .switch-thumb {
+            pointer-events: none;
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border-radius: var(--radius-full);
+            background-color: white;
+            box-shadow: var(--shadow-sm);
+            transform: translateX(0);
+            transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .switch[aria-checked="true"] .switch-thumb {
+            transform: translateX(20px);
+        }
+
+        .item-actions {
+            display: flex;
+            align-items: center;
+            gap: 1.5rem;
+        }
+
+        .agent-count {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 0.75rem;
+            color: var(--muted-foreground);
+            cursor: pointer;
+            padding: 4px 8px;
+            border-radius: 4px;
+            transition: background 0.2s;
+        }
+
+        .agent-count:hover {
+            background: var(--muted);
+            color: var(--foreground);
+        }
+
+        .btn-icon {
+            color: var(--muted-foreground);
+            padding: 0.4rem;
+            border-radius: var(--radius-md);
+            transition: all 0.2s;
+        }
+
+        .btn-icon:hover {
+            background: var(--muted);
+            color: var(--foreground);
+        }
+
+        .btn-icon.danger:hover {
+            background: #fee2e2;
+            color: var(--error);
+        }
+
+        /* === Slide-over (侧边抽屉面板) === */
+        .overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(255, 255, 255, 0.4);
+            backdrop-filter: blur(2px);
+            z-index: 40;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s ease;
+        }
+
+        .overlay.show {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .sheet {
+            position: fixed;
+            top: 0;
+            right: 0;
+            height: 100vh;
+            width: 400px;
+            max-width: 100vw;
+            background: var(--background);
+            box-shadow: var(--shadow-xl);
+            z-index: 50;
+            display: flex;
+            flex-direction: column;
+            transform: translateX(100%);
+            transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+            border-left: 1px solid var(--border);
+        }
+
+        .sheet.open {
+            transform: translateX(0);
+        }
+
+        .sheet-header {
+            padding: 1.5rem;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .sheet-title {
+            font-size: 1.125rem;
+            font-weight: 600;
+        }
+
+        .sheet-close {
+            color: var(--muted-foreground);
+            cursor: pointer;
+            padding: 4px;
+            border-radius: 4px;
+        }
+
+        .sheet-close:hover {
+            background: var(--muted);
+            color: var(--foreground);
+        }
+
+        .sheet-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 1.5rem;
+        }
+
+        .form-section {
+            margin-bottom: 2rem;
+        }
+
+        .section-title {
+            font-size: 0.875rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            color: var(--foreground);
+        }
+
+        /* Shadcn Checkbox 列表 */
+        .checkbox-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+        }
+
+        .checkbox-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 0.75rem;
+            padding: 0.75rem;
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md);
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .checkbox-item:hover {
+            background: var(--page-bg);
+        }
+
+        .checkbox-item[data-selected="true"] {
+            border-color: var(--foreground);
+            background: var(--page-bg);
+        }
+
+        .custom-checkbox {
+            width: 16px;
+            height: 16px;
+            border: 1px solid var(--input);
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-top: 2px;
+            transition: all 0.2s;
+            flex-shrink: 0;
+            background: transparent;
+        }
+
+        .checkbox-item[data-selected="true"] .custom-checkbox {
+            background: var(--foreground);
+            border-color: var(--foreground);
+        }
+
+        .checkbox-item .check-icon {
+            display: none;
+            color: var(--background);
+        }
+
+        .checkbox-item[data-selected="true"] .check-icon {
+            display: block;
+        }
+
+        .checkbox-info h4 {
+            font-size: 0.875rem;
+            font-weight: 500;
+            color: var(--foreground);
+        }
+
+        .checkbox-info p {
+            font-size: 0.75rem;
+            color: var(--muted-foreground);
+            margin-top: 2px;
+        }
+
+        .sheet-footer {
+            padding: 1.5rem;
+            border-top: 1px solid var(--border);
+            display: flex;
+            justify-content: flex-end;
+            gap: 0.75rem;
+            background: var(--background);
+        }
+
+        /* === 之前写的 OlympusMsg 系统样式注入 (隐藏以保持干净) === */
+        #olympus-toast-container {
+            position: fixed;
+            top: 1.5rem;
+            right: 1.5rem;
+            z-index: 9999;
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+            pointer-events: none;
+        }
+
+        .o-toast {
+            background: var(--background);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md);
+            box-shadow: var(--shadow-lg);
+            padding: 1rem;
+            width: 350px;
+            display: flex;
+            gap: 0.75rem;
+            align-items: flex-start;
+            pointer-events: auto;
+            position: relative;
+            overflow: hidden;
+            opacity: 0;
+            transform: translateX(100%) scale(0.95);
+            transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .o-toast.show {
+            opacity: 1;
+            transform: translateX(0) scale(1);
+        }
+
+        .o-toast.hide {
+            opacity: 0;
+            transform: scale(0.95);
+            margin-top: -80px;
+        }
+
+        .o-toast-icon {
+            flex-shrink: 0;
+            margin-top: 2px;
+        }
+
+        .o-toast-icon.success {
+            color: var(--success);
+        }
+
+        .o-toast-content {
+            flex: 1;
+        }
+
+        .o-toast-title {
+            font-size: 0.875rem;
+            font-weight: 600;
+            color: var(--foreground);
+            margin-bottom: 0.25rem;
+        }
+
+        .o-toast-desc {
+            font-size: 0.875rem;
+            color: var(--muted-foreground);
+            line-height: 1.4;
+        }
+
+        .o-toast-close {
+            position: absolute;
+            top: 0.75rem;
+            right: 0.75rem;
+            color: var(--muted-foreground);
+            padding: 0.25rem;
+            border-radius: 4px;
+            transition: background 0.2s, color 0.2s;
+            cursor: pointer;
+        }
+
+        .o-toast-close:hover {
+            background: var(--muted);
+            color: var(--foreground);
+        }
+
+        .o-modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(255, 255, 255, 0.4);
+            backdrop-filter: blur(4px);
+            z-index: 99999;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            transition: opacity 0.2s ease;
+        }
+
+        .o-modal-overlay.show {
+            opacity: 1;
+        }
+
+        .o-modal-box {
+            background: var(--background);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            box-shadow: var(--shadow-xl);
+            width: 100%;
+            max-width: 420px;
+            padding: 1.5rem;
+            transform: scale(0.95) translateY(10px);
+            opacity: 0;
+            transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .o-modal-overlay.show .o-modal-box {
+            transform: scale(1) translateY(0);
+            opacity: 1;
+        }
+
+        .o-modal-header {
+            margin-bottom: 1.5rem;
+        }
+
+        .o-modal-title {
+            font-size: 1.125rem;
+            font-weight: 600;
+            color: var(--foreground);
+            margin-bottom: 0.5rem;
+        }
+
+        .o-modal-desc {
+            font-size: 0.875rem;
+            color: var(--muted-foreground);
+            line-height: 1.5;
+        }
+
+        .o-modal-footer {
+            display: flex;
+            justify-content: flex-end;
+            gap: 0.75rem;
+        }
+
+        .btn-danger {
+            background: var(--error);
+            color: white;
+            border: 1px solid var(--error);
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="app-container">
+        <!-- 左侧主导航 -->
+        <nav class="sidebar-primary">
+            <div class="logo-box">O</div>
+            <button class="nav-item"><i data-lucide="plus" stroke-width="2.5" size="20"></i><span>New</span></button>
+            <button class="nav-item"><i data-lucide="home" stroke-width="2" size="20"></i><span>Home</span></button>
+            <button class="nav-item"><i data-lucide="network" stroke-width="2"
+                    size="20"></i><span>Agents</span></button>
+            <!-- Skills Tab 高亮 -->
+            <button class="nav-item active"><i data-lucide="blocks" stroke-width="2"
+                    size="20"></i><span>Skills</span></button>
+            <button class="nav-item"><i data-lucide="folder-open" stroke-width="2"
+                    size="20"></i><span>Drive</span></button>
+            <div class="sidebar-bottom">
+                <button class="nav-item"><i data-lucide="circle-user-round" stroke-width="2" size="24"></i></button>
+            </div>
+        </nav>
+
+        <!-- 主内容区 -->
+        <main class="main-content">
+            <header class="page-header">
+                <div class="header-title">
+                    <h1>Skills Library</h1>
+                    <p>Manage external tools and APIs your Agents can use.</p>
+                </div>
+                <div class="header-actions">
+                    <button class="btn btn-default" onclick="triggerImport()"><i data-lucide="download" size="16"></i>
+                        Import Skill</button>
+                    <button class="btn btn-primary" onclick="openSheet('New Custom Skill')"><i data-lucide="plus"
+                            size="16"></i> Create Skill</button>
+                </div>
+            </header>
+
+            <div class="toolbar">
+                <div class="search-input-box">
+                    <i data-lucide="search" size="16"></i>
+                    <input type="text" class="search-input" placeholder="Search skills...">
+                </div>
+            </div>
+
+            <!-- Skills List -->
+            <div class="list-container" id="skillList">
+
+                <!-- Skill Item 1 -->
+                <div class="list-item" id="skill-row-1">
+                    <div class="item-icon"><i data-lucide="search" size="20"></i></div>
+                    <div class="item-info">
+                        <div class="item-title-row">
+                            <span class="item-title">Google Search API</span>
+                            <span class="badge active">Official</span>
+                        </div>
+                        <div class="item-desc">Allows the agent to search the web for real-time information.</div>
+                    </div>
+                    <div class="item-actions">
+                        <div class="agent-count" onclick="openSheet('Google Search API')" title="Manage Permissions">
+                            <i data-lucide="users" size="14"></i> 3 Agents
+                        </div>
+                        <!-- Shadcn Switch -->
+                        <button type="button" class="switch" role="switch" aria-checked="true"
+                            onclick="toggleSwitch(this, 'Google Search API')">
+                            <span class="switch-thumb"></span>
+                        </button>
+                        <div style="width: 1px; height: 24px; background: var(--border); margin: 0 0.5rem;"></div>
+                        <button class="btn-icon" onclick="openSheet('Google Search API')"><i data-lucide="settings-2"
+                                size="16"></i></button>
+                        <button class="btn-icon danger" onclick="confirmDelete('skill-row-1', 'Google Search API')"><i
+                                data-lucide="trash-2" size="16"></i></button>
+                    </div>
+                </div>
+
+                <!-- Skill Item 2 -->
+                <div class="list-item" id="skill-row-2">
+                    <div class="item-icon"><i data-lucide="github" size="20"></i></div>
+                    <div class="item-info">
+                        <div class="item-title-row">
+                            <span class="item-title">GitHub Repo Reader</span>
+                            <span class="badge">Community</span>
+                        </div>
+                        <div class="item-desc">Fetch and read code files from public GitHub repositories.</div>
+                    </div>
+                    <div class="item-actions">
+                        <div class="agent-count" onclick="openSheet('GitHub Repo Reader')">
+                            <i data-lucide="users" size="14"></i> 1 Agent
+                        </div>
+                        <button type="button" class="switch" role="switch" aria-checked="false"
+                            onclick="toggleSwitch(this, 'GitHub Repo Reader')">
+                            <span class="switch-thumb"></span>
+                        </button>
+                        <div style="width: 1px; height: 24px; background: var(--border); margin: 0 0.5rem;"></div>
+                        <button class="btn-icon" onclick="openSheet('GitHub Repo Reader')"><i data-lucide="settings-2"
+                                size="16"></i></button>
+                        <button class="btn-icon danger" onclick="confirmDelete('skill-row-2', 'GitHub Repo Reader')"><i
+                                data-lucide="trash-2" size="16"></i></button>
+                    </div>
+                </div>
+
+                <!-- Skill Item 3 -->
+                <div class="list-item" id="skill-row-3">
+                    <div class="item-icon"><i data-lucide="database" size="20"></i></div>
+                    <div class="item-info">
+                        <div class="item-title-row">
+                            <span class="item-title">PostgreSQL Query</span>
+                            <span class="badge">Custom</span>
+                        </div>
+                        <div class="item-desc">Execute read-only SQL queries against internal databases.</div>
+                    </div>
+                    <div class="item-actions">
+                        <div class="agent-count" onclick="openSheet('PostgreSQL Query')">
+                            <i data-lucide="users" size="14"></i> 0 Agents
+                        </div>
+                        <button type="button" class="switch" role="switch" aria-checked="true"
+                            onclick="toggleSwitch(this, 'PostgreSQL Query')">
+                            <span class="switch-thumb"></span>
+                        </button>
+                        <div style="width: 1px; height: 24px; background: var(--border); margin: 0 0.5rem;"></div>
+                        <button class="btn-icon" onclick="openSheet('PostgreSQL Query')"><i data-lucide="settings-2"
+                                size="16"></i></button>
+                        <button class="btn-icon danger" onclick="confirmDelete('skill-row-3', 'PostgreSQL Query')"><i
+                                data-lucide="trash-2" size="16"></i></button>
+                    </div>
+                </div>
+
+            </div>
+        </main>
+    </div>
+
+    <!-- === Slide-over 面板 (用于分配 Agent 权限) === -->
+    <div class="overlay" id="sheetOverlay" onclick="closeSheet()"></div>
+    <div class="sheet" id="permissionSheet">
+        <div class="sheet-header">
+            <h2 class="sheet-title" id="sheetTitle">Manage Skill</h2>
+            <button class="sheet-close" onclick="closeSheet()"><i data-lucide="x" size="20"></i></button>
+        </div>
+        <div class="sheet-body">
+
+            <div class="form-section">
+                <h3 class="section-title">Agent Permissions</h3>
+                <p style="font-size: 0.875rem; color: var(--muted-foreground); margin-bottom: 1rem;">
+                    Select which Agents are allowed to use this skill.
+                </p>
+
+                <!-- Checkbox 列表 -->
+                <div class="checkbox-list">
+                    <div class="checkbox-item" data-selected="true" onclick="toggleCheckbox(this)">
+                        <div class="custom-checkbox"><i data-lucide="check" size="12" class="check-icon"
+                                stroke-width="3"></i></div>
+                        <div class="checkbox-info">
+                            <h4>Senior Copywriter</h4>
+                            <p>Marketing and content creation.</p>
+                        </div>
+                    </div>
+
+                    <div class="checkbox-item" data-selected="false" onclick="toggleCheckbox(this)">
+                        <div class="custom-checkbox"><i data-lucide="check" size="12" class="check-icon"
+                                stroke-width="3"></i></div>
+                        <div class="checkbox-info">
+                            <h4>Python Code Assistant</h4>
+                            <p>Code generation and debugging.</p>
+                        </div>
+                    </div>
+
+                    <div class="checkbox-item" data-selected="true" onclick="toggleCheckbox(this)">
+                        <div class="custom-checkbox"><i data-lucide="check" size="12" class="check-icon"
+                                stroke-width="3"></i></div>
+                        <div class="checkbox-info">
+                            <h4>Data Analyst Bot</h4>
+                            <p>Data processing and visualization.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+        <div class="sheet-footer">
+            <button class="btn btn-default" onclick="closeSheet()">Cancel</button>
+            <button class="btn btn-primary" onclick="savePermissions()">Save Changes</button>
+        </div>
+    </div>
+
+
+    <!-- JavaScript 逻辑 -->
+    <script>
+        lucide.createIcons();
+
+        /* --- 极简版 OlympusMsg 系统 (用于当前页面交互) --- */
+        const OlympusMsg = {
+            toast: function (title, desc) {
+                let container = document.getElementById('olympus-toast-container');
+                if (!container) {
+                    container = document.createElement('div');
+                    container.id = 'olympus-toast-container';
+                    document.body.appendChild(container);
+                }
+                const toast = document.createElement('div');
+                toast.className = 'o-toast';
+                toast.innerHTML = `
+                    <i data-lucide="check-circle-2" size="20" class="o-toast-icon success"></i>
+                    <div class="o-toast-content">
+                        <div class="o-toast-title">${title}</div>
+                        <div class="o-toast-desc">${desc}</div>
+                    </div>
+                    <button class="o-toast-close" onclick="this.parentElement.remove()"><i data-lucide="x" size="16"></i></button>
+                `;
+                container.appendChild(toast);
+                lucide.createIcons({ root: toast });
+                toast.offsetHeight; toast.classList.add('show');
+                setTimeout(() => { toast.classList.remove('show'); toast.classList.add('hide'); setTimeout(() => toast.remove(), 300); }, 3000);
+            },
+            confirm: function (title, desc) {
+                return new Promise((resolve) => {
+                    const overlay = document.createElement('div');
+                    overlay.className = 'o-modal-overlay';
+                    overlay.innerHTML = `
+                        <div class="o-modal-box">
+                            <div class="o-modal-header"><h3 class="o-modal-title">${title}</h3><p class="o-modal-desc">${desc}</p></div>
+                            <div class="o-modal-footer">
+                                <button class="btn btn-default" id="c-cancel">Cancel</button>
+                                <button class="btn btn-danger" id="c-confirm">Delete</button>
+                            </div>
+                        </div>`;
+                    document.body.appendChild(overlay);
+                    overlay.offsetHeight; overlay.classList.add('show');
+
+                    const close = (res) => { overlay.classList.remove('show'); setTimeout(() => overlay.remove(), 200); resolve(res); };
+                    overlay.querySelector('#c-cancel').onclick = () => close(false);
+                    overlay.querySelector('#c-confirm').onclick = () => close(true);
+                });
+            }
+        };
+
+        /* --- 业务逻辑交互 --- */
+
+        // 1. 开关 Toggle 逻辑
+        function toggleSwitch(btn, skillName) {
+            const isChecked = btn.getAttribute('aria-checked') === 'true';
+            btn.setAttribute('aria-checked', !isChecked);
+
+            const state = !isChecked ? 'Enabled' : 'Disabled';
+            OlympusMsg.toast(`Skill ${state}`, `${skillName} has been ${state.toLowerCase()} for the workspace.`);
+        }
+
+        // 2. 删除逻辑 (结合 Modal)
+        async function confirmDelete(rowId, skillName) {
+            const result = await OlympusMsg.confirm(
+                `Delete "${skillName}"?`,
+                `This action cannot be undone. Agents will immediately lose access to this tool.`
+            );
+            if (result) {
+                const row = document.getElementById(rowId);
+                row.style.opacity = '0';
+                row.style.transform = 'scale(0.98)';
+                setTimeout(() => row.remove(), 200);
+                OlympusMsg.toast("Skill Deleted", `${skillName} has been permanently removed.`);
+            }
+        }
+
+        // 3. 导入按钮模拟
+        function triggerImport() {
+            OlympusMsg.toast("Importing Skill...", "Reading OpenAPI schema from clipboard.");
+        }
+
+        // 4. Slide-over (抽屉) 逻辑
+        const sheetOverlay = document.getElementById('sheetOverlay');
+        const permissionSheet = document.getElementById('permissionSheet');
+        const sheetTitle = document.getElementById('sheetTitle');
+
+        function openSheet(title) {
+            sheetTitle.innerText = `${title} Permissions`;
+            sheetOverlay.classList.add('show');
+            permissionSheet.classList.add('open');
+        }
+
+        function closeSheet() {
+            sheetOverlay.classList.remove('show');
+            permissionSheet.classList.remove('open');
+        }
+
+        // 5. Checkbox 选择逻辑
+        function toggleCheckbox(item) {
+            const isSelected = item.getAttribute('data-selected') === 'true';
+            item.setAttribute('data-selected', !isSelected);
+        }
+
+        function savePermissions() {
+            closeSheet();
+            OlympusMsg.toast("Permissions Updated", "Agent access rights have been saved.");
+        }
+    </script>
+</body>
+
+</html>
